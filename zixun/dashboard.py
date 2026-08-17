@@ -24,6 +24,7 @@ from zixun.forecast_dashboard import render_forecast_section  # noqa: E402
 from zixun.settings import (  # noqa: E402
     REPORT_TYPE_LABELS,
     RUN_STATUS_PATH,
+    RUN_SCRIPT,
     VARIETY_LABELS,
 )
 
