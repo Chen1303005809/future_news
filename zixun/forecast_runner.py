@@ -282,7 +282,7 @@ def load_display_data(contract: str) -> dict | None:
         display["plot_path"] = plot
         display["plot_caption"] = (
             "三日走势预测（蓝色：Kronos 中位数/区间；"
-            "橙色虚线引线：资讯校准后日终预测）"
+            "橙色虚线：资讯校准后逐时收盘轨迹）"
         )
     else:
         display["plot_path"] = plot if plot.exists() else None

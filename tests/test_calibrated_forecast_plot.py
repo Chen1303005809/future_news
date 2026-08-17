@@ -6,40 +6,56 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 from calibration.cli import _render_calibrated_plot
-from calibration.forecast_plot import (
-    calibrated_day_endpoints,
-)
+from calibration.forecast_plot import build_calibrated_return_path
 
 
 class CalibratedForecastPlotTests(unittest.TestCase):
-    def test_day_endpoints_use_calibrated_returns_and_probabilities(self) -> None:
+    def test_segmented_interpolation_matches_all_three_day_endpoints(self) -> None:
         calibration = {
             "days": [
-                {"day": 1, "calibrated": {"predicted_return": 0.01, "up_probability": 0.6}},
-                {"day": 2, "calibrated": {"predicted_return": -0.02, "up_probability": 0.4}},
-                {"day": 3, "calibrated": {"predicted_return": 0.03, "up_probability": 0.7}},
+                {"day": 1, "applied_shift": {"return": 0.02}},
+                {"day": 2, "applied_shift": {"return": -0.01}},
+                {"day": 3, "applied_shift": {"return": 0.03}},
             ]
         }
-        timestamps = pd.DatetimeIndex(
-            ["2026-01-02 14:00:00", "2026-01-03 14:00:00", "2026-01-04 14:00:00"]
-        )
-
-        x_values, y_values, labels = calibrated_day_endpoints(
+        predicted_close = np.linspace(100.0, 109.0, 19)
+        calibrated_returns = build_calibrated_return_path(
+            predicted_close,
+            100.0,
             calibration,
-            origin_timestamp=pd.Timestamp("2026-01-01 14:00:00"),
-            target_timestamps=timestamps,
-            day_end_indices=[0, 1, 2],
+            [6, 13, 18],
         )
 
-        self.assertEqual(list(x_values), [pd.Timestamp("2026-01-01 14:00:00"), *list(timestamps)])
-        np.testing.assert_allclose(y_values, [0.0, 0.01, -0.02, 0.03])
-        self.assertEqual(
-            labels,
-            ["D1: +1.0%\np=60%", "D2: -2.0%\np=40%", "D3: +3.0%\np=70%"],
+        expected_offsets = np.concatenate(
+            [
+                np.linspace(0.0, 0.02, 8)[1:],
+                np.linspace(0.02, -0.01, 8)[1:],
+                np.linspace(-0.01, 0.03, 6)[1:],
+            ]
         )
+        expected_returns = predicted_close / 100.0 - 1.0 + expected_offsets
+        np.testing.assert_allclose(calibrated_returns, expected_returns)
+        np.testing.assert_allclose(
+            calibrated_returns[[6, 13, 18]],
+            expected_returns[[6, 13, 18]],
+        )
+
+    def test_zero_shifts_preserve_original_hourly_path(self) -> None:
+        calibration = {
+            "days": [
+                {"day": 1, "applied_shift": {"return": 0.0}},
+                {"day": 2, "applied_shift": {"return": 0.0}},
+                {"day": 3, "applied_shift": {"return": 0.0}},
+            ]
+        }
+        close = np.linspace(100.0, 103.0, 19)
+        calibrated_returns = build_calibrated_return_path(
+            close, 100.0, calibration, [6, 13, 18]
+        )
+
+        np.testing.assert_allclose(calibrated_returns, close / 100.0 - 1.0)
 
     def test_successful_calibration_replaces_forecast_plot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -78,6 +94,7 @@ class CalibratedForecastPlotTests(unittest.TestCase):
                             ],
                             "day_end_indices": [0, 1, 2],
                             "actual_path": path_rows,
+                            "predicted_path": path_rows,
                             "q10_path": path_rows,
                             "median_path": path_rows,
                             "q90_path": path_rows,
@@ -90,9 +107,18 @@ class CalibratedForecastPlotTests(unittest.TestCase):
                 json.dumps(
                     {
                         "days": [
-                            {"day": 1, "calibrated": {"predicted_return": 0.005, "up_probability": 0.55}},
-                            {"day": 2, "calibrated": {"predicted_return": 0.01, "up_probability": 0.6}},
-                            {"day": 3, "calibrated": {"predicted_return": 0.015, "up_probability": 0.65}},
+                            {
+                                "day": 1,
+                                "applied_shift": {"return": 0.005},
+                            },
+                            {
+                                "day": 2,
+                                "applied_shift": {"return": -0.002},
+                            },
+                            {
+                                "day": 3,
+                                "applied_shift": {"return": 0.003},
+                            },
                         ]
                     }
                 ),
@@ -105,6 +131,32 @@ class CalibratedForecastPlotTests(unittest.TestCase):
             self.assertGreater(output_path.stat().st_size, 1_000)
             self.assertEqual(output_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
 
+    def test_invalid_day_end_indices_are_rejected(self) -> None:
+        calibration = {
+            "days": [
+                {"day": 1, "applied_shift": {"return": 0.01}},
+                {"day": 2, "applied_shift": {"return": 0.01}},
+                {"day": 3, "applied_shift": {"return": 0.01}},
+            ]
+        }
+        with self.assertRaises(ValueError):
+            build_calibrated_return_path(
+                np.full(19, 100.0), 100.0, calibration, [6, 13, 17]
+            )
+
+    def test_old_endpoint_shape_is_not_used(self) -> None:
+        """The hourly path requires applied shifts, not point labels."""
+        calibration = {
+            "days": [
+                {"day": 1, "calibrated": {"predicted_return": 0.01}},
+                {"day": 2, "calibrated": {"predicted_return": 0.02}},
+                {"day": 3, "calibrated": {"predicted_return": 0.03}},
+            ]
+        }
+        with self.assertRaises(ValueError):
+            build_calibrated_return_path(
+                np.full(19, 100.0), 100.0, calibration, [6, 13, 18]
+            )
 
 if __name__ == "__main__":
     unittest.main()

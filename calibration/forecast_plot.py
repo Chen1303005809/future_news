@@ -1,16 +1,11 @@
-"""Render the forecast chart with the completed news-calibration overlay.
-
-The calibration result only supplies one return and probability for each
-trading-day endpoint.  It is displayed as three off-line labels with orange
-dashed leaders, so the base forecast and actual-price lines remain visible.
-"""
+"""Render the forecast chart with a calibrated hourly close trajectory."""
 from __future__ import annotations
 
 import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 os.environ.setdefault(
     "MPLCONFIGDIR",
@@ -115,52 +110,81 @@ def _load_context(
     return frame.reset_index(drop=True)
 
 
-def calibrated_day_endpoints(
-    calibration: Mapping[str, Any],
-    *,
-    origin_timestamp: pd.Timestamp,
-    target_timestamps: pd.DatetimeIndex,
-    day_end_indices: list[int],
-) -> tuple[pd.DatetimeIndex, np.ndarray, list[str]]:
-    """提取校准后的三日日终收益率、概率及其对应时间。"""
+def _applied_return_shifts(calibration: Mapping[str, Any]) -> np.ndarray:
     days = calibration.get("days")
     if not isinstance(days, list):
         raise ValueError("calibration.days必须是列表")
-    if len(day_end_indices) != 3:
-        raise ValueError("kronos.day_end_indices必须包含三个日终索引")
 
     by_day: dict[int, Mapping[str, Any]] = {}
     for item in days:
         if isinstance(item, Mapping) and isinstance(item.get("day"), int):
             by_day[item["day"]] = item
 
-    times: list[pd.Timestamp] = [origin_timestamp]
-    returns: list[float] = [0.0]
-    labels: list[str] = []
+    shifts: list[float] = []
     for day in range(1, 4):
         item = by_day.get(day)
         if item is None:
             raise ValueError(f"calibration.days缺少第{day}日")
-        calibrated = item.get("calibrated")
-        if not isinstance(calibrated, Mapping):
-            raise ValueError(f"calibration.days[{day}].calibrated缺失")
-        end_index = day_end_indices[day - 1]
-        if not isinstance(end_index, int) or not 0 <= end_index < len(target_timestamps):
-            raise ValueError(f"第{day}日日终索引无效：{end_index!r}")
-
-        predicted_return = _as_finite_float(
-            calibrated.get("predicted_return"),
-            field=f"calibration.days[{day}].calibrated.predicted_return",
+        applied = item.get("applied_shift")
+        if not isinstance(applied, Mapping):
+            raise ValueError(f"calibration.days[{day}].applied_shift缺失")
+        shifts.append(
+            _as_finite_float(
+                applied.get("return"),
+                field=f"calibration.days[{day}].applied_shift.return",
+            )
         )
-        probability = _as_finite_float(
-            calibrated.get("up_probability"),
-            field=f"calibration.days[{day}].calibrated.up_probability",
-        )
-        times.append(target_timestamps[end_index])
-        returns.append(predicted_return)
-        labels.append(f"D{day}: {predicted_return:+.1%}\np={probability:.0%}")
+    return np.asarray(shifts, dtype=np.float64)
 
-    return pd.DatetimeIndex(times), np.asarray(returns), labels
+
+def _interpolated_offsets(
+    bar_count: int,
+    day_end_indices: Sequence[int],
+    day_end_shifts: Sequence[float],
+) -> np.ndarray:
+    if bar_count < 1:
+        raise ValueError("预测路径不能为空")
+    if len(day_end_indices) != 3 or len(day_end_shifts) != 3:
+        raise ValueError("三日校准必须包含三个日终索引和偏移")
+
+    indices = [int(index) for index in day_end_indices]
+    if (
+        indices[0] < 0
+        or indices[2] != bar_count - 1
+        or not indices[0] < indices[1] < indices[2]
+    ):
+        raise ValueError(
+            "day_end_indices必须严格递增，且最后一个索引必须是预测路径末根"
+        )
+
+    offsets = np.empty(bar_count, dtype=np.float64)
+    previous_index = -1
+    previous_shift = 0.0
+    for end_index, target_shift in zip(indices, day_end_shifts):
+        count = end_index - previous_index
+        offsets[previous_index + 1 : end_index + 1] = np.linspace(
+            previous_shift, float(target_shift), count + 1
+        )[1:]
+        previous_index = end_index
+        previous_shift = float(target_shift)
+    return offsets
+
+
+def build_calibrated_return_path(
+    predicted_close: Sequence[float],
+    origin_close: float,
+    calibration: Mapping[str, Any],
+    day_end_indices: Sequence[int],
+) -> np.ndarray:
+    """将三个日终收益率偏移按交易 K 数插值到完整预测路径。"""
+    if origin_close == 0:
+        raise ValueError("origin_close不能为 0")
+    close = np.asarray(predicted_close, dtype=np.float64)
+    if close.ndim != 1 or len(close) == 0 or not np.isfinite(close).all():
+        raise ValueError("predicted_close必须是非空有限数值序列")
+    shifts = _applied_return_shifts(calibration)
+    offsets = _interpolated_offsets(len(close), day_end_indices, shifts)
+    return close / origin_close - 1.0 + offsets
 
 
 def render_calibrated_forecast_plot(
@@ -198,12 +222,24 @@ def render_calibrated_forecast_plot(
     actual_close = _close_path(kronos, "actual_path", expected_length)
     q10_close = _close_path(kronos, "q10_path", expected_length)
     q50_close = _close_path(kronos, "median_path", expected_length)
+    predicted_close = _close_path(kronos, "predicted_path", expected_length)
     q90_close = _close_path(kronos, "q90_path", expected_length)
     forecast_x = pd.DatetimeIndex([origin_timestamp, *target_timestamps.tolist()])
     actual_y = np.concatenate(([0.0], actual_close / origin_close - 1.0))
     q10_y = np.concatenate(([0.0], q10_close / origin_close - 1.0))
     q50_y = np.concatenate(([0.0], q50_close / origin_close - 1.0))
     q90_y = np.concatenate(([0.0], q90_close / origin_close - 1.0))
+    calibrated_y = np.concatenate(
+        (
+            [0.0],
+            build_calibrated_return_path(
+                predicted_close,
+                origin_close,
+                calibration,
+                day_end_indices,
+            ),
+        )
+    )
 
     source = forecast.get("source")
     config = forecast.get("config")
@@ -214,13 +250,6 @@ def render_calibrated_forecast_plot(
         source["path"], origin_timestamp=origin_timestamp, lookback=lookback
     )
     context_y = context["close"].to_numpy(dtype=np.float64) / origin_close - 1.0
-
-    calibrated_x, calibrated_y, labels = calibrated_day_endpoints(
-        calibration,
-        origin_timestamp=origin_timestamp,
-        target_timestamps=target_timestamps,
-        day_end_indices=day_end_indices,
-    )
 
     fig, axis = plt.subplots(figsize=(14, 7))
     axis.plot(
@@ -237,28 +266,10 @@ def render_calibrated_forecast_plot(
         color=KRONOS_COLOR, linewidth=2.0, linestyle="-", label="Kronos median",
     )
     axis.plot(
-        [], [], color=CALIBRATED_COLOR, linewidth=1.4, linestyle=(0, (3, 2)),
-        label="news-calibrated day-end labels",
+        forecast_x, calibrated_y,
+        color=CALIBRATED_COLOR, linewidth=1.8, linestyle="--",
+        label="Kronos calibrated hourly close",
     )
-    label_offsets = [(-38, -34), (-50, 28), (38, 18)]
-    for (timestamp, value, label), (offset_x, offset_y) in zip(
-        zip(calibrated_x[1:], calibrated_y[1:], labels), label_offsets
-    ):
-        axis.annotate(
-            label,
-            xy=(timestamp, value), xytext=(offset_x, offset_y),
-            textcoords="offset points",
-            ha="right" if offset_x < 0 else "left",
-            va="top" if offset_y < 0 else "bottom",
-            color=CALIBRATED_COLOR, fontsize=8, fontweight="semibold", zorder=6,
-            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82, "pad": 1.5},
-            arrowprops={
-                "arrowstyle": "-",
-                "color": CALIBRATED_COLOR,
-                "linestyle": (0, (3, 2)),
-                "linewidth": 1.2,
-            },
-        )
 
     for day_end in day_end_indices[:-1]:
         axis.axvline(
