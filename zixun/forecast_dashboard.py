@@ -106,7 +106,10 @@ def render_forecast_section() -> None:
     m3.metric("目标三日", "、".join(str(d)[:10] for d in fc.get("target_days") or ["—"]))
 
     if data.get("plot_path") is not None:
-        st.image(str(data["plot_path"]), caption="三日走势预测（10%-90% 区间 + 中位数）")
+        st.image(
+            str(data["plot_path"]),
+            caption=data.get("plot_caption") or "三日走势预测（10%-90% 区间 + 中位数）",
+        )
 
     calib = data.get("calibration")
     if calib is None:

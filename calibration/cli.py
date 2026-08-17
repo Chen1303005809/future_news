@@ -41,6 +41,26 @@ EXIT_FORECAST_LOAD_FAILED = 6
 logger = logging.getLogger("calibration")
 
 
+def _render_calibrated_plot(input_path: Path, calibration_path: Path) -> None:
+    """在校准成功后生成带橙色校准线的预测图；绘图失败不影响校准产物。"""
+    try:
+        from .forecast_plot import render_calibrated_forecast_plot
+
+        # 覆盖预测步骤刚生成的同一张图；下次预测会先重新生成原始图，再校准叠加。
+        plot_path = input_path.parent / "forecast_plot.png"
+        staged_path = plot_path.with_name(
+            f".{plot_path.stem}.calibrating{plot_path.suffix}"
+        )
+        try:
+            render_calibrated_forecast_plot(input_path, calibration_path, staged_path)
+            staged_path.replace(plot_path)
+        finally:
+            staged_path.unlink(missing_ok=True)
+        logger.info("已写出校准叠加图 %s", plot_path)
+    except Exception as exc:  # noqa: BLE001 - 图表是附加产物，不能遮蔽校准结果
+        logger.warning("校准叠加图生成失败：%s", exc)
+
+
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -294,6 +314,7 @@ def _run_calibration(
         llm_attempts=llm_meta.get("attempts"),
     )
     write_calibration(output, output_path)
+    _render_calibrated_plot(input_path, output_path)
     logger.info("已写出校准结果 %s", output_path)
     return EXIT_OK
 

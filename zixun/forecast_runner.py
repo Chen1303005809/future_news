@@ -260,9 +260,6 @@ def load_display_data(contract: str) -> dict | None:
     except (json.JSONDecodeError, OSError):
         return None
 
-    plot = out / "forecast_plot.png"
-    display["plot_path"] = plot if plot.exists() else None
-
     calib_path = out / "calibration.json"
     if calib_path.exists():
         try:
@@ -271,5 +268,24 @@ def load_display_data(contract: str) -> dict | None:
             display["calibration"] = None
     else:
         display["calibration"] = None
+
+    plot = out / "forecast_plot.png"
+    meta = (display["calibration"] or {}).get("meta") or {}
+    has_valid_overlay = (
+        plot.exists()
+        and display["calibration"] is not None
+        and not meta.get("skipped_reason")
+        and not meta.get("llm_error")
+        and plot.stat().st_mtime >= calib_path.stat().st_mtime
+    )
+    if has_valid_overlay:
+        display["plot_path"] = plot
+        display["plot_caption"] = (
+            "三日走势预测（蓝色：Kronos 中位数/区间；"
+            "橙色虚线引线：资讯校准后日终预测）"
+        )
+    else:
+        display["plot_path"] = plot if plot.exists() else None
+        display["plot_caption"] = "三日走势预测（10%-90% 区间 + 中位数）"
 
     return display
