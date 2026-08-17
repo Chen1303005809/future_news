@@ -1,0 +1,30 @@
+# 资讯校准 K线预测 配置
+#
+# 给定一个 Kronos 生成的 forecast_result.json，按其元数据（品种+时间）筛资讯、
+# 喂 LLM 做研判 + 温和数值校准。
+# 本文件保留为兼容旧调用的 YAML 基础配置；默认 CLI 运行从项目根目录 .env 读取，
+# CLI 参数优先级最高。需要使用本文件时显式传入 --config。
+#
+# 注意：
+#   - api_key 不写在此文件，从环境变量 OPENAI_API_KEY 读取（避免泄露/进版本库）。
+#   - base_url 用 OpenAI 兼容端点，可换通义/Moonshot/OpenAI 等。
+
+retrieval:
+  lookback_days: 3                    # 资讯回溯天数（以 origin_timestamp 为上界往前）
+  max_articles: 15                    # 喂给 LLM 的资讯条数上限（按时间近排序截断）
+  fallback_to_black_sector: true      # 目标品种 DB 无数据时退到 ironore+rebar（黑色系通用）
+  ai_summary_cap: 200                 # prompt 内 ai_summary 截断字数
+  preview_cap: 160                    # prompt 内正文预览截断字数
+
+llm:
+  base_url: "https://api.deepseek.com/v1"   # OpenAI 兼容端点
+  model: "deepseek-chat"
+  temperature: 0.3                    # 研判需稳定，低温
+  max_retries: 2                      # 网络/超时/5xx 指数退避重试次数
+  timeout_seconds: 60
+
+calibration:
+  max_prob_shift: 0.10                # 单日上涨概率偏移上限（±10pp）
+  max_return_shift: 0.015             # 单日收益率偏移上限（±1.5%）
+  prob_clamp: [0.0, 1.0]              # 概率绝对区间
+  return_clamp: [-0.10, 0.10]         # 三日累计收益率绝对区间（超 10% 为停板级异常）
