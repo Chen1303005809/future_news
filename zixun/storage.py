@@ -22,8 +22,7 @@ CREATE TABLE IF NOT EXISTS articles (
   publish_time   DATETIME,
   fetched_at     DATETIME NOT NULL,
   ai_summary     TEXT,
-  body_text      TEXT,
-  priority       TEXT
+  body_text      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_variety_time ON articles(variety, publish_time);
 CREATE INDEX IF NOT EXISTS idx_time         ON articles(publish_time);
@@ -66,7 +65,6 @@ def insert_article(
     report_type: str,
     source_channel: str,
     source_id: str,
-    priority: str,
 ) -> bool:
     """入库一篇文章。已存在则跳过。返回是否新增。"""
     h = hash_url(article.url)
@@ -74,13 +72,13 @@ def insert_article(
     cur = conn.execute(
         """INSERT OR IGNORE INTO articles
            (url, url_hash, title, variety, report_type, source_channel, source_id,
-            publish_time, fetched_at, ai_summary, body_text, priority)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            publish_time, fetched_at, ai_summary, body_text)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (
             article.url, h, article.title, ",".join(variety),
             report_type, source_channel, source_id,
             article.publish_time, now, article.ai_summary,
-            article.body_text, priority,
+            article.body_text,
         ),
     )
     conn.commit()

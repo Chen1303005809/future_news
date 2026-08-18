@@ -17,7 +17,6 @@ def _build_where(
     date_from: str | None = None,
     date_to: str | None = None,
     keyword: str | None = None,
-    priority: str | None = None,
 ) -> tuple[str, list]:
     clauses: list[str] = ["1=1"]
     params: list = []
@@ -40,10 +39,6 @@ def _build_where(
         clauses.append("publish_time <= ?")
         params.append(end)
 
-    if priority:
-        clauses.append("priority = ?")
-        params.append(priority)
-
     if keyword:
         clauses.append(
             "(title LIKE ? OR body_text LIKE ? OR ai_summary LIKE ?)"
@@ -61,11 +56,10 @@ def list_articles(
     date_from: str | None = None,
     date_to: str | None = None,
     keyword: str | None = None,
-    priority: str | None = None,
     limit: int = 300,
 ) -> list[dict]:
     where, params = _build_where(
-        variety, report_type, date_from, date_to, keyword, priority
+        variety, report_type, date_from, date_to, keyword
     )
     sql = f"""
         SELECT id, url, title, variety, report_type, source_channel, source_id,
@@ -88,11 +82,10 @@ def count_by_day(
     variety: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    priority: str | None = None,
 ) -> list[dict]:
     """按日 × 主品种 的文章数。"""
     where, params = _build_where(
-        variety, None, date_from, date_to, None, priority
+        variety, None, date_from, date_to, None
     )
     where += " AND publish_time IS NOT NULL"
     sql = f"""
@@ -122,9 +115,8 @@ def count_by_variety(
     *,
     date_from: str | None = None,
     date_to: str | None = None,
-    priority: str | None = None,
 ) -> dict[str, int]:
-    where, params = _build_where(None, None, date_from, date_to, None, priority)
+    where, params = _build_where(None, None, date_from, date_to, None)
     sql = f"SELECT variety FROM articles WHERE {where}"
     conn = get_conn()
     try:
@@ -143,10 +135,9 @@ def count_total(
     variety: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    priority: str | None = None,
 ) -> int:
     where, params = _build_where(
-        variety, None, date_from, date_to, None, priority
+        variety, None, date_from, date_to, None
     )
     sql = f"SELECT COUNT(*) AS n FROM articles WHERE {where}"
     conn = get_conn()

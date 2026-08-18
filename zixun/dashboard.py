@@ -53,11 +53,9 @@ with st.sidebar:
     date_from = st.date_input("开始日期", today - timedelta(days=7))
     date_to = st.date_input("结束日期", today)
     keyword = st.text_input("关键词（标题/正文/摘要）")
-    priority = st.selectbox("优先级", ["全部", "core", "optional"])
 
 df_from = date_from.isoformat()
 df_to = date_to.isoformat()
-pri = None if priority == "全部" else priority
 variety = variety_sel or None
 report_type = rt_sel or None
 kw = keyword.strip() or None
@@ -77,8 +75,7 @@ def _management_section() -> None:
     st_r = runner.get_status()
     if st_r.get("state") == "running":
         st.success(
-            f"🔄 抓取进行中：PID {st_r.get('pid')} | 优先级 {st_r.get('priority')} "
-            f"| 启动于 {st_r.get('start_at')}"
+            f"🔄 抓取进行中：PID {st_r.get('pid')} | 启动于 {st_r.get('start_at')}"
         )
     else:
         st.info(
@@ -86,22 +83,15 @@ def _management_section() -> None:
         )
 
     # ---- 触发按钮 ----
-    rc1, rc2, rc3 = st.columns([1, 1, 4])
+    rc1, rc2 = st.columns([1, 5])
     with rc1:
-        if st.button("🚀 抓取全部", key="btn_run_all", use_container_width=True):
+        if st.button("🚀 抓取必要栏目", key="btn_run_all", use_container_width=True):
             r = runner.start_run()
             if r["ok"]:
                 st.toast("已启动抓取")
             else:
                 st.toast(r["msg"], icon="⚠️")
     with rc2:
-        if st.button("⚡ 仅抓 core", key="btn_run_core", use_container_width=True):
-            r = runner.start_run(priority="core")
-            if r["ok"]:
-                st.toast("已启动 core 抓取")
-            else:
-                st.toast(r["msg"], icon="⚠️")
-    with rc3:
         st.caption(f"日志：`{runner.PANEL_RUN_LOG}`（仅展示尾部 20 行）")
 
     # ---- 日志尾部 ----
@@ -216,10 +206,10 @@ c2.metric("近 7 天总数", queries.count_total(date_from=week_ago))
 c3.metric(
     "当前筛选结果",
     queries.count_total(
-        variety=variety, date_from=df_from, date_to=df_to, priority=pri
+        variety=variety, date_from=df_from, date_to=df_to
     ),
 )
-vc = queries.count_by_variety(date_from=df_from, date_to=df_to, priority=pri)
+vc = queries.count_by_variety(date_from=df_from, date_to=df_to)
 c4.metric("涉及品种", len(vc))
 
 # 品种分布小条
@@ -231,7 +221,7 @@ if vc:
 # ============ 资讯密度图 ============
 st.subheader("📈 资讯密度（按日 × 品种）")
 day_data = queries.count_by_day(
-    variety=variety, date_from=df_from, date_to=df_to, priority=pri
+    variety=variety, date_from=df_from, date_to=df_to
 )
 if day_data:
     ddf = pd.DataFrame(day_data)
@@ -250,7 +240,7 @@ else:
 arts = queries.list_articles(
     variety=variety, report_type=report_type,
     date_from=df_from, date_to=df_to,
-    keyword=kw, priority=pri, limit=500,
+    keyword=kw, limit=500,
 )
 
 st.subheader(f"📰 文章列表（共 {len(arts)} 篇，最多展示 500）")

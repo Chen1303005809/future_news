@@ -56,7 +56,7 @@ def get_status() -> dict:
     return st
 
 
-def start_run(priority: str | None = None, source: str | None = None) -> dict:
+def start_run(source: str | None = None) -> dict:
     """启动后台抓取。返回 {"ok": bool, "msg": ..., "status": ...}。"""
     st = get_status()
     if st.get("state") == "running":
@@ -74,8 +74,6 @@ def start_run(priority: str | None = None, source: str | None = None) -> dict:
     log_fp.flush()
 
     cmd = [sys.executable, "-m", "zixun.cli", "run"]
-    if priority:
-        cmd += ["--priority", priority]
     if source:
         cmd += ["--source", source]
 
@@ -91,7 +89,6 @@ def start_run(priority: str | None = None, source: str | None = None) -> dict:
         "pid": proc.pid,
         "start_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "cmd": " ".join(cmd),
-        "priority": priority or "all",
         "source": source,
         "log_path": str(PANEL_RUN_LOG),
     }

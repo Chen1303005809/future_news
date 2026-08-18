@@ -13,7 +13,7 @@
 
 ## 依赖安装
 
-需要 Python 3.10+。
+默认使用 Python 3.12 虚拟环境。
 
 ```bash
 pip install -r requirements.txt
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 python -m zixun.cli init
 
 # 2. 干跑验证（只解析不入库，看各栏目抓到几篇、标题样本）
-python -m zixun.cli run --dry-run --priority core
+python -m zixun.cli run --dry-run
 
 # 3. 实际抓取（默认所有栏目）
 python -m zixun.cli run
@@ -47,7 +47,7 @@ streamlit run zixun/dashboard.py
 
 启动面板后（`streamlit run zixun/dashboard.py`），页面顶部「**⚙️ 抓取与定时**」区提供：
 
-- **🚀 抓取全部 / ⚡ 仅抓 core**：一键触发后台抓取，子进程独立运行，不阻塞面板浏览；状态与日志每 5 秒自动刷新。
+- **🚀 抓取必要栏目**：一键触发后台抓取，子进程独立运行，不阻塞面板浏览；状态与日志每 5 秒自动刷新。
 - **抓取日志**：展开可看尾部 20 行（含每个栏目解析篇数、新增文章标题）。
 - **定时任务（crontab）管理**：
   - 一键应用预设：**每天 3 次（9:13 / 13:17 / 18:23）** 或 **每天 1 次（08:37）**
@@ -65,7 +65,6 @@ streamlit run zixun/dashboard.py
 | `python -m zixun.cli run` | 抓取最新文章并入库 |
 | `python -m zixun.cli run --dry-run` | 干跑：只解析、不入库（验证用） |
 | `python -m zixun.cli run --source <id>` | 仅抓指定栏目（栏目 id 见 `sources.yaml`） |
-| `python -m zixun.cli run --priority core` | 仅抓 core 优先级栏目 |
 | `python -m zixun.cli backfill --pages N` | 历史回填（每栏目翻 N 页） |
 | `streamlit run zixun/dashboard.py` | 启动前端面板（默认 http://localhost:8501） |
 
@@ -104,6 +103,7 @@ streamlit run zixun/dashboard.py
 2. **地区过滤**：标题含地区词（省份/城市/港口/区域）且**不含全局词**（全国/整体/宏观…）→ 丢弃
    - 保留"全国建筑钢材早报"，丢弃"山东建筑钢材早报"
 3. **白名单**（仅 analysis 类栏目）：标题须命中相关词（库存/产量/调价…）才保留
+4. **栏目级约束**：快讯和专项栏目可配置关键词或多组关键词门槛，只保留目标事件
 
 预览某栏目会被过滤掉哪些（不入库）：
 ```bash
@@ -127,7 +127,7 @@ python -m zixun.cli run --dry-run --source rebar_daily
 
 ```
 zixun/
-├── config/sources.yaml     # 栏目配置（品种/URL/类型/优先级/黑名单）
+├── config/sources.yaml     # 必要栏目配置（品种/URL/类型/标题约束）
 ├── zixun/
 │   ├── fetcher.py          # HTTP 抓取（限速/重试/防反爬）
 │   ├── parser.py           # 列表页+详情页通用解析
@@ -156,13 +156,12 @@ zixun/
 | `url`, `url_hash` | 文章原文 URL 及其 md5（去重键） |
 | `title` | 标题 |
 | `variety` | 品种标签，逗号分隔：`rebar` / `ironore` / `cokingcoal` / `coke` |
-| `report_type` | `daily` / `weekly` / `monthly` / `data` / `analysis` |
+| `report_type` | `daily` / `weekly` / `monthly` / `data` / `analysis` / `event` |
 | `source_channel` | 频道：`jiancai` / `tks` / `coal` / `list1` |
 | `source_id` | 栏目 id（对应 `sources.yaml`） |
 | `publish_time` | 精确发布时间（与 K 线对齐用） |
 | `ai_summary` | 网站自带 AI 摘要（核心内容） |
 | `body_text` | 正文纯文本（过短时用摘要兜底） |
-| `priority` | `core` / `optional` |
 
 索引：`(variety, publish_time)`、`(publish_time)`、`(report_type, publish_time)`。
 
@@ -214,15 +213,19 @@ sources:
   - id: rebar_steel_mill_price        # 唯一 id
     variety: [rebar]                  # 品种标签
     channel: list1                    # 频道
-    report_type: data                 # daily/weekly/monthly/data/analysis
-    priority: optional                # core/optional
+    report_type: data                 # daily/weekly/monthly/data/analysis/event
     list_url: "https://list1.mysteel.com/article/p-XXX-------------{page}.html"
     max_pages: 1                      # 翻几页
+    title_include_keywords: [库存, 产量]  # 可选：至少命中一个
 ```
 
 - `{page}` 为页码占位符。
-- `title_blacklist` 全局生效，命中词的标题直接丢弃。
 - `report_type: analysis` 类栏目额外启用相关词白名单，避免抓到无关软文。
+- `title_include_keywords`、`title_exclude_keywords` 和 `required_keyword_groups`
+  可对单个栏目做更严格的标题筛选。
+- `allow_regional: true` 仅用于停复产、事故等地区事件，允许它们绕过地区日报过滤。
+- `exclude_keyword_exceptions` 允许专项栏目保留有业务含义的全局排除词，例如进口焦煤采购“招标”。
+- 所有配置栏目都会抓取和参与资讯检索，不再区分栏目优先级。
 - 已排除期货价格类栏目（黑色期货早报、连铁持仓等）。
 
 ---

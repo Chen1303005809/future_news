@@ -119,4 +119,5 @@ REPORT_TYPE_LABELS = {
     "monthly": "月报",
     "data": "数据",
     "analysis": "分析/快讯",
+    "event": "事件快讯",
 }

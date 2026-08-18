@@ -5,7 +5,6 @@
   python -m zixun.cli run --dry-run              # 干跑（只解析不入库）
   python -m zixun.cli run                        # 抓取
   python -m zixun.cli run --source iron_daily    # 仅抓指定栏目
-  python -m zixun.cli run --priority core        # 仅抓 core 栏目
   python -m zixun.cli backfill --pages 5         # 历史回填（翻 5 页）
 """
 from __future__ import annotations
@@ -64,7 +63,6 @@ def cmd_run(args) -> int:
     stats = run(
         dry_run=args.dry_run,
         source_id=args.source,
-        priority=args.priority,
     )
     _print_stats(stats)
     return 0
@@ -73,7 +71,6 @@ def cmd_run(args) -> int:
 def cmd_backfill(args) -> int:
     stats = run(
         max_pages_override=args.pages,
-        priority=args.priority,
     )
     _print_stats(stats)
     return 0
@@ -90,16 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("run", help="抓取最新文章")
     sp.add_argument("--dry-run", action="store_true", help="只解析不入库（验证用）")
     sp.add_argument("--source", help="仅抓指定栏目 id")
-    sp.add_argument(
-        "--priority", choices=["core", "optional"], help="仅抓该优先级栏目"
-    )
     sp.set_defaults(func=cmd_run)
 
     sp = sub.add_parser("backfill", help="历史回填（翻多页）")
     sp.add_argument("--pages", type=int, default=5, help="每个栏目翻几页")
-    sp.add_argument(
-        "--priority", choices=["core", "optional"], help="仅抓该优先级栏目"
-    )
     sp.set_defaults(func=cmd_backfill)
     return p
 

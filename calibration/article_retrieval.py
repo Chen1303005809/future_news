@@ -109,7 +109,6 @@ def retrieve_articles(
         variety=[variety],
         date_from=date_from,
         date_to=date_to,
-        priority="core",
         limit=max_articles + over_fetch,
     )
 
@@ -122,7 +121,6 @@ def retrieve_articles(
             variety=list(BLACK_SECTOR_FALLBACK),
             date_from=date_from,
             date_to=date_to,
-            priority="core",
             limit=max_articles + over_fetch,
         )
         variety_queried = BLACK_SECTOR_FALLBACK

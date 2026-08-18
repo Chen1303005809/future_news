@@ -182,16 +182,13 @@ python -m pip install -r requirements.txt
 python -m zixun.cli init
 
 # 只抓取并解析，不写数据库；建议先用来验证栏目和过滤规则
-python -m zixun.cli run --dry-run --priority core
+python -m zixun.cli run --dry-run
 
 # 抓取全部配置栏目
 python -m zixun.cli run
 
 # 只抓某个栏目
 python -m zixun.cli run --source rebar_daily
-
-# 只抓 core 栏目
-python -m zixun.cli run --priority core
 
 # 历史回填，每个栏目翻 N 页
 python -m zixun.cli backfill --pages 5
@@ -257,13 +254,17 @@ OUTPUT_DIR="outputs/i2610"
 | `id` | 栏目唯一标识，CLI 的 `--source` 使用它。 |
 | `variety` | 栏目默认品种列表。 |
 | `channel` | Mysteel 频道，如 `jiancai`、`tks`、`coal`、`list1`。 |
-| `report_type` | `daily`、`weekly`、`monthly`、`data` 或 `analysis`。 |
-| `priority` | `core` 或 `optional`。 |
-| `list_url` | 列表页 URL 模板，必须包含 `{page}`。 |
+| `report_type` | `daily`、`weekly`、`monthly`、`data`、`analysis` 或 `event`。 |
+| `list_url` | 列表页 URL；分页栏目可包含 `{page}`。 |
 | `max_pages` | 默认抓取页数。 |
 | `is_datas` | 标记数据栏目；当前解析逻辑与普通详情页相同。 |
+| `title_include_keywords` | 可选；标题至少命中一个词。 |
+| `title_exclude_keywords` | 可选；标题命中任一词即丢弃。 |
+| `required_keyword_groups` | 可选；每组至少命中一个词，适合快讯双门槛。 |
+| `allow_regional` | 可选；地区事件绕过地区日报过滤。 |
+| `exclude_keyword_exceptions` | 可选；允许专项栏目保留有业务含义的全局排除词。 |
 
-全局 `title_blacklist` 对所有栏目生效。新增栏目通常只需要追加配置，不需要修改抓取主流程。期货价格类栏目目前按项目边界排除。
+全局降噪词默认对所有栏目生效，专项栏目可用 `exclude_keyword_exceptions` 精确放行。新增栏目通常只需要追加配置，不需要修改抓取主流程。期货价格类栏目目前按项目边界排除。
 
 ### `config/filters.yaml`
 
@@ -317,7 +318,6 @@ OPENAI_API_KEY="<your-api-key>"
 | `fetched_at` | 抓取入库时间。 |
 | `ai_summary` | Mysteel AI 摘要。 |
 | `body_text` | 清洗后的正文；正文过短时回退到 AI 摘要。 |
-| `priority` | `core` 或 `optional`。 |
 
 主要索引为 `(variety, publish_time)`、`publish_time`、`(report_type, publish_time)` 和 `url_hash`。`publish_time` 是后续按日聚合和与 K 线对齐的关键字段。
 
@@ -394,7 +394,7 @@ LLM 配置错误：未设置环境变量 OPENAI_API_KEY
 | 已有预测目录 | `outputs/i2609`、`outputs/i2610`、`outputs/rb2701` |
 | 已有 `forecast_result.json` | 3 个 |
 | 已有 `calibration.json` | 3 个；不代表三次 LLM 都成功 |
-| 最近一次抓取 | 2026-08-14，`core`，列出 560、筛掉 154、保留 406、新增 130、跳过 276、失败 0 |
+| 最近一次抓取 | 2026-08-14，列出 560、筛掉 154、保留 406、新增 130、跳过 276、失败 0 |
 | Kronos 模型包 | `kronos-model-arch==0.1.0`，当前项目 `.venv` 已安装 |
 | 模型缓存 | `/Users/eurus/Code/kronos/Kronos/csj/artifacts/hf_cache`，机器相关，仅为权重缓存，不是源码依赖 |
 | 预测冒烟 | `kline_i2610.json`、CPU、`sample_count=1/2` 均已生成独立临时产物 |
@@ -417,7 +417,7 @@ LLM 配置错误：未设置环境变量 OPENAI_API_KEY
 
 每次完成重要改动、重跑任务或切换环境后，更新本节和文档顶部的“最后验证时间”。
 
-- 最后验证时间：2026-08-17
+- 最后验证时间：2026-08-18
 - 当前任务：维护 Mysteel 资讯抓取、Streamlit 浏览和 Kronos 三日预测校准链路
 - 当前阻塞：真实 LLM 校准仍依赖 `OPENAI_API_KEY`；当前 `.env` 未填写真实密钥，因此无资讯或缺 key 时会透传模型原值
 - 建议下一步：配置 API key 后重新运行一个已有合约，确认 `calibration.json` 不再包含 `meta.llm_error`，并检查 `applied_shift`、`sources` 和面板显示

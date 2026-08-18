@@ -1,215 +1,179 @@
 # 黑色系现货资讯抓取栏目配置
 #
+# 只保留对未来数小时至 3 个交易日有潜在增量价值的栏目，不再设置栏目等级。
+# 栏目顺序有意义：结构化数据和专项事件源排在宽泛日报、
+# 综合快讯之前，避免同一 URL 首次入库时被标成过于宽泛的 source_id。
+#
 # 品种标识：
 #   rebar       螺纹钢（建筑钢材）
 #   ironore     铁矿石
 #   cokingcoal  焦煤
 #   coke        焦炭
 #
-# report_type: daily / weekly / monthly / data / analysis
-# priority:    core（必抓）/ optional（建议或低频）
-# is_datas:    栏目位于 /datas/ 路径（铁矿石数据型栏目），仅标记，解析逻辑相同
+# report_type: daily / weekly / monthly / data / analysis / event
+# is_datas:    栏目位于 /datas/ 路径，仅作来源说明，解析逻辑相同
 #
-# URL 模板中 {page} 为页码占位符，从 1 开始。
+# 可选的栏目级标题约束：
+#   title_include_keywords: 命中任一词才保留
+#   title_exclude_keywords: 命中任一词即丢弃
+#   required_keyword_groups: 每组至少命中一个词；适合“品种词 + 事件词”双门槛
+#   allow_regional: 允许保留地区性事件（全局地区过滤不生效）
+#   exclude_keyword_exceptions: 本栏目允许出现的全局排除词
 #
-# 标题黑名单（命中则丢弃）见下方 title_blacklist。
-
-title_blacklist:
-  - 会议
-  - 评选
-  - 通知
-  - 招聘
-  - 广告
-  - 征文
-  - 活动
-  - 报名
-  - 招标
-  - 中标公示
-
-# 期货价格类栏目已按需求排除（预测端已有期货价数据源）：
-#   - 黑色期货早报（tks 首页系列）
-#   - 连铁主力合约成交持仓（tks pa4231）
-# 如后续需要成本端（钢坯/废钢/海运费/普氏），在此追加即可，无需改代码。
+# URL 可包含 {page}；没有分页的首页型信息流直接填写固定 URL。
 
 sources:
-  # ============ 螺纹钢（建材）============
+  # ============ 螺纹钢：结构化供需 + 全国行情背景 ============
+  - id: rebar_inventory
+    variety: [rebar]
+    channel: jiancai
+    report_type: data
+    list_url: "https://jiancai.mysteel.com/article/pa4860a010101aaaaa{page}.html"
+    max_pages: 2
+    title_include_keywords: [库存, 产量, 表观需求, 产量库存速递]
+
+  - id: steelmill_events
+    variety: [rebar, ironore, cokingcoal, coke]
+    channel: factory
+    report_type: event
+    list_url: "https://factory.mysteel.com/"
+    max_pages: 1
+    allow_regional: true
+    required_keyword_groups:
+      - [钢厂, 高炉, 电炉, 建筑钢材, 螺纹, 线材, 盘螺]
+      - [检修, 停产, 复产, 限产, 减产, 旬价, 结算价]
+
   - id: rebar_daily
     variety: [rebar]
     channel: jiancai
     report_type: daily
-    priority: core
     list_url: "https://jiancai.mysteel.com/article/pa12a010101aaaaa{page}.html"
     max_pages: 2
 
-  - id: rebar_weekly
-    variety: [rebar]
-    channel: jiancai
-    report_type: weekly
-    priority: core
-    list_url: "https://jiancai.mysteel.com/article/pa4380a010101aaaaa{page}.html"
-    max_pages: 2
-
-  - id: rebar_editor_view
-    variety: [rebar]
-    channel: jiancai
-    report_type: analysis
-    priority: optional
-    list_url: "https://jiancai.mysteel.com/article/pa4286a010101aaaaa{page}.html"
-    max_pages: 1
-
-  - id: rebar_monthly
-    variety: [rebar]
-    channel: jiancai
-    report_type: monthly
-    priority: optional
-    list_url: "https://jiancai.mysteel.com/article/pa3668a010101aaaaa{page}.html"
-    max_pages: 1
-
-  - id: rebar_mill_survey
-    variety: [rebar]
-    channel: list1
-    report_type: analysis
-    priority: optional
-    list_url: "https://list1.mysteel.com/article/p-93-------------{page}.html"
-    max_pages: 1
-
-  - id: rebar_social_stock
-    variety: [rebar]
-    channel: list1
-    report_type: data
-    priority: optional
-    list_url: "https://list1.mysteel.com/article/p-196-------------{page}.html"
-    max_pages: 1
-
-  # ============ 铁矿石 ============
-  - id: iron_daily
+  # ============ 铁矿石：供应、需求和首次披露事件 ============
+  - id: iron_shipments
     variety: [ironore]
     channel: tks
-    report_type: daily
-    priority: core
-    list_url: "https://tks.mysteel.com/article/pa6233,407aaaaaa{page}.html"
+    report_type: data
+    is_datas: true
+    list_url: "https://tks.mysteel.com/datas/article/pa6242aaaaaa{page}.html"
     max_pages: 2
+    title_include_keywords: [发运, 离港, 运量]
+
+  - id: iron_arrivals
+    variety: [ironore]
+    channel: tks
+    report_type: data
+    is_datas: true
+    list_url: "https://tks.mysteel.com/datas/article/pa7197aaaaaa{page}.html"
+    max_pages: 2
+    title_include_keywords: [到港]
 
   - id: iron_port_stock
     variety: [ironore]
     channel: tks
     report_type: data
     is_datas: true
-    priority: core
     list_url: "https://tks.mysteel.com/datas/article/pa4260,7200aaaaaa{page}.html"
     max_pages: 2
+    title_include_keywords: [港口库存, 港存, 疏港, 在港船舶, 海外七港]
 
   - id: iron_pigiron_output
     variety: [ironore]
     channel: tks
     report_type: data
     is_datas: true
-    priority: core
     list_url: "https://tks.mysteel.com/datas/article/pa4262,7073aaaaaa{page}.html"
     max_pages: 2
+    title_include_keywords: [高炉, 铁水, 生铁产量]
 
   - id: iron_steelmill_stock
     variety: [ironore]
     channel: tks
     report_type: data
     is_datas: true
-    priority: core
     list_url: "https://tks.mysteel.com/datas/article/pa4261aaaaaa{page}.html"
     max_pages: 2
+    title_include_keywords: [钢厂库存, 进口矿库存, 库存消费比, 可用天数]
 
-  - id: iron_mine_express
+  - id: iron_mine_events
     variety: [ironore]
     channel: tks
-    report_type: analysis
-    priority: optional
-    list_url: "https://tks.mysteel.com/article/pa6942aaaaaa{page}.html"
+    report_type: event
+    list_url: "https://tks.mysteel.com/article/pa6942a01,0311aaaaa{page}.html"
     max_pages: 1
+    allow_regional: true
+    title_include_keywords: [产量, 发运, 指引, 减产, 停产, 复产, 事故, 天气, 港口, 铁路, 中断, 恢复]
 
-  - id: iron_steel_express
+  - id: iron_steel_events
+    variety: [ironore, cokingcoal, coke, rebar]
+    channel: tks
+    report_type: event
+    list_url: "https://tks.mysteel.com/article/pa6941a0311aaaaa{page}.html"
+    max_pages: 1
+    allow_regional: true
+    title_include_keywords: [高炉, 铁水, 检修, 停产, 复产, 限产, 减产, 环保]
+
+  - id: iron_daily
     variety: [ironore]
     channel: tks
-    report_type: analysis
-    priority: optional
-    list_url: "https://tks.mysteel.com/article/pa6941aaaaaa{page}.html"
-    max_pages: 1
+    report_type: daily
+    list_url: "https://tks.mysteel.com/article/pa6233,407aaaaaa{page}.html"
+    max_pages: 2
 
-  - id: iron_weekly
-    variety: [ironore]
-    channel: tks
-    report_type: weekly
-    priority: optional
-    list_url: "https://tks.mysteel.com/article/pa408aaaaaa{page}.html"
-    max_pages: 1
+  # ============ 焦煤焦炭：生产调查、竞拍和价格制度事件 ============
+  - id: coal_surveys
+    variety: [cokingcoal, coke]
+    channel: coal
+    report_type: data
+    list_url: "https://coal.mysteel.com/article/p-5153,5166,5167,5168-------------{page}.htm"
+    max_pages: 2
+    title_include_keywords: [矿山, 洗煤厂, 独立焦企, 焦化厂, 钢厂, 生产调研, 开工, 产能利用率, 库存, 可用天数]
 
-  - id: iron_monthly
-    variety: [ironore]
-    channel: tks
-    report_type: monthly
-    priority: optional
-    list_url: "https://tks.mysteel.com/article/pa7206,7207aaaaaa{page}.html"
-    max_pages: 1
+  - id: coal_auction
+    variety: [cokingcoal]
+    channel: coal
+    report_type: data
+    list_url: "https://coal.mysteel.com/article/pa5150a050202aaaaa{page}.html"
+    max_pages: 2
+    title_include_keywords: [竞拍, 挂牌, 流拍]
 
-  # ============ 焦煤焦炭（煤焦频道）============
+  - id: coal_price_events
+    variety: [cokingcoal, coke]
+    channel: coal
+    report_type: event
+    list_url: "https://coal.mysteel.com/article/pa5151,4415aaaaaa{page}.html"
+    max_pages: 2
+    allow_regional: true
+    title_include_keywords: [提涨, 提降, 落地, 执行, 调价, 停产, 复产, 限产, 减产, 检修]
+
+  - id: coal_import_events
+    variety: [cokingcoal, coke]
+    channel: coal
+    report_type: event
+    list_url: "https://coal.mysteel.com/article/pa3033a050202aaaaa{page}.html"
+    max_pages: 1
+    allow_regional: true
+    exclude_keyword_exceptions: [招标]
+    title_include_keywords: [闭关, 通关, 口岸, 运输, 中断, 恢复, 招标, 远期成交, 监管区库存]
+
   - id: coal_price_index_daily
     variety: [cokingcoal, coke]
     channel: coal
     report_type: daily
-    priority: core
     list_url: "https://coal.mysteel.com/article/pa6055aaaaaa{page}.html"
     max_pages: 2
 
-  - id: coal_port_stock
-    variety: [cokingcoal, coke]
-    channel: coal
-    report_type: data
-    priority: core
-    list_url: "https://coal.mysteel.com/article/pa6173aaaaaa{page}.html"
-    max_pages: 2
-
-  - id: coal_coke_steel
-    variety: [cokingcoal, coke]
-    channel: coal
-    report_type: daily
-    priority: core
-    list_url: "https://coal.mysteel.com/article/pa5153aaaaaa{page}.html"
-    max_pages: 2
-
-  - id: coal_weekly
-    variety: [cokingcoal, coke]
-    channel: coal
-    report_type: weekly
-    priority: optional
-    list_url: "https://coal.mysteel.com/article/pa473aaaaaa{page}.html"
+  # ============ 综合分钟级快讯：只保留黑色系首次披露事件 ============
+  - id: black_market_flash
+    variety: [rebar, ironore, cokingcoal, coke]
+    channel: news
+    report_type: event
+    list_url: "https://m.mysteel.com/"
     max_pages: 1
-
-  - id: coal_coking_coal
-    variety: [cokingcoal]
-    channel: coal
-    report_type: daily
-    priority: optional
-    list_url: "https://coal.mysteel.com/article/pa5170aaaaaa{page}.html"
-    max_pages: 1
-
-  - id: coal_import
-    variety: [cokingcoal, coke]
-    channel: coal
-    report_type: analysis
-    priority: optional
-    list_url: "https://coal.mysteel.com/article/pa5160aaaaaa{page}.html"
-    max_pages: 1
-
-  - id: coal_monthly
-    variety: [cokingcoal, coke]
-    channel: coal
-    report_type: monthly
-    priority: optional
-    list_url: "https://coal.mysteel.com/article/pa5152aaaaaa{page}.html"
-    max_pages: 1
-
-  - id: coal_analysis
-    variety: [cokingcoal, coke]
-    channel: coal
-    report_type: analysis
-    priority: optional
-    list_url: "https://coal.mysteel.com/article/pa5151,4415aaaaaa{page}.html"
-    max_pages: 1
+    allow_regional: true
+    exclude_keyword_exceptions: [会议]
+    title_exclude_keywords: [早读, 午报, 晚餐, 早报, 日报, 周报, 月报, 概率, 预计, 预期, 或将, 有望]
+    required_keyword_groups:
+      - [钢铁, 钢厂, 高炉, 铁水, 螺纹, 建筑钢材, 铁矿, 矿山, 焦煤, 焦炭, 煤矿, 洗煤, 焦企, 蒙煤, 口岸]
+      - [停产, 复产, 检修, 限产, 减产, 事故, 中断, 恢复, 关闭, 复通, 政策, 提涨, 提降, 发运, 到港, 调价]

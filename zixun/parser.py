@@ -8,23 +8,28 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 # 文章详情页 URL 识别：
 #   https://gc.mysteel.com/a/{dateId}/{HASH}.html
 #   https://tks.mysteel.com/gck/a/{dateId}/{HASH}.html
-#   https://tks.mysteel.com/jkk/a/{dateId}/{HASH}.html
-#   https://tks.mysteel.com/datas/a/{dateId}/{HASH}.html
+#   https://coal.m.mysteel.com/jiaotan/a/{dateId}/{HASH}_abc.html
+#   https://jiancai.m.mysteel.com/m/{dateId}/{HASH}_abc.html
 ARTICLE_URL_RE = re.compile(
-    r"https?://[a-z0-9]+\.mysteel\.com/(?:[a-z0-9]+/)?a/\d{6,}/[A-F0-9]{8,}\.html",
+    r"https?://(?:[a-z0-9-]+\.)+mysteel\.com/"
+    r"(?:[a-z0-9]+/)*(?:a|m)/\d{6,}/[A-F0-9]{8,}(?:_[a-z0-9]+)?\.html",
     re.IGNORECASE,
 )
 
 # 发布时间提取（YYYY-MM-DD HH:MM[:SS]）
-PUBLISH_TIME_RE = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)")
+PUBLISH_TIME_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)"
+)
 
 # 文本中需剔除的噪声行
 NOISE_LINE_KEYWORDS = [
@@ -48,13 +53,17 @@ class ArticleData:
     source: str | None
 
 
-def parse_list_page(html: str) -> list[tuple[str, str]]:
+def parse_list_page(
+    html: str, base_url: str | None = None
+) -> list[tuple[str, str]]:
     """从列表页提取 (文章 URL, 标题) 对，去重保序。"""
     soup = BeautifulSoup(html, "lxml")
     seen: set[str] = set()
     items: list[tuple[str, str]] = []
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
+        if base_url:
+            href = urljoin(base_url, href)
         if not ARTICLE_URL_RE.match(href):
             continue
         title = (a.get("title") or a.get_text(strip=True)).strip()
@@ -84,11 +93,35 @@ def parse_article(html: str, url: str, fallback_title: str = "") -> ArticleData:
     """解析文章详情页。"""
     soup = BeautifulSoup(html, "lxml")
 
+    structured_headline: str | None = None
+    structured_publish_time: str | None = None
+    for node in soup.select('script[type="application/ld+json"]'):
+        try:
+            payload = json.loads(node.string or node.get_text())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        candidates = payload if isinstance(payload, list) else [payload]
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if not structured_headline and candidate.get("headline"):
+                structured_headline = str(candidate["headline"]).strip()
+            if not structured_publish_time and candidate.get("datePublished"):
+                match = PUBLISH_TIME_RE.search(str(candidate["datePublished"]))
+                if match:
+                    structured_publish_time = match.group(1).replace("T", " ")
+
     # ---- 标题（多策略）----
     title = fallback_title
-    og = soup.select_one('meta[property="og:title"]')
-    if og and og.get("content"):
-        title = og["content"].strip()
+    article_title = soup.select_one(".article-title")
+    if article_title and article_title.get_text(strip=True):
+        title = article_title.get_text(strip=True)
+    elif structured_headline:
+        title = structured_headline
+    else:
+        og = soup.select_one('meta[property="og:title"]')
+        if og and og.get("content"):
+            title = og["content"].strip()
     if not title:
         h1 = soup.select_one("h1")
         if h1:
@@ -107,13 +140,15 @@ def parse_article(html: str, url: str, fallback_title: str = "") -> ArticleData:
     if meta_pub and meta_pub.get("content"):
         m = PUBLISH_TIME_RE.search(meta_pub["content"])
         if m:
-            publish_time = m.group(1)
+            publish_time = m.group(1).replace("T", " ")
     if not publish_time:
-        pt = soup.select_one(".publish-time")
-        if pt:
-            m = PUBLISH_TIME_RE.search(pt.get_text(strip=True))
+        for pt in soup.select(".publish-time, time, .source"):
+            m = PUBLISH_TIME_RE.search(pt.get_text(" ", strip=True))
             if m:
-                publish_time = m.group(1)
+                publish_time = m.group(1).replace("T", " ")
+                break
+    if not publish_time:
+        publish_time = structured_publish_time
 
     # ---- AI 摘要（核心内容）----
     # 优先 .ai-summary__text（<pre>，纯文本最干净），回退 .ai-summary__body

@@ -23,10 +23,10 @@ from .storage import (
 logger = logging.getLogger(__name__)
 
 
-def load_config(path: Path = CONFIG_PATH) -> tuple[list[str], list[dict]]:
+def load_config(path: Path = CONFIG_PATH) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
-    return cfg.get("title_blacklist", []), cfg.get("sources", [])
+    return cfg.get("sources", [])
 
 
 def _new_stats() -> dict:
@@ -44,21 +44,17 @@ def run(
     *,
     dry_run: bool = False,
     source_id: str | None = None,
-    priority: str | None = None,
     max_pages_override: int | None = None,
     config_path: Path = CONFIG_PATH,
     db_path: Path = DB_PATH,
 ) -> dict[str, dict]:
     """执行抓取。返回每个栏目的统计 {source_id: stats}。"""
-    _, sources = load_config(config_path)
+    sources = load_config(config_path)
     if source_id:
         sources = [s for s in sources if s["id"] == source_id]
         if not sources:
             logger.error("未找到栏目: %s", source_id)
             return {}
-    if priority:
-        sources = [s for s in sources if s.get("priority") == priority]
-
     fetcher = Fetcher()
     conn = None if dry_run else get_conn(db_path)
     filter_cfg = filters_mod.load_filters()
@@ -84,7 +80,7 @@ def run(
                     st["failed"] += 1
                     break  # 该栏目列表抓失败，放弃该栏目后续页
 
-                items = parse_list_page(html)
+                items = parse_list_page(html, base_url=list_url)
                 st["listed"] += len(items)
                 logger.info(
                     "[%s] 第%d页 解析到 %d 篇", sid, page, len(items)
@@ -92,8 +88,16 @@ def run(
 
                 for art_url, title in items:
                     keep, reason = filters_mod.evaluate(
-                        title, filter_cfg, apply_whitelist=apply_whitelist
+                        title,
+                        filter_cfg,
+                        apply_whitelist=apply_whitelist,
+                        allow_regional=bool(src.get("allow_regional")),
+                        exclude_keyword_exceptions=src.get(
+                            "exclude_keyword_exceptions"
+                        ),
                     )
+                    if keep:
+                        keep, reason = filters_mod.evaluate_source(title, src)
                     if not keep:
                         st["filtered"] += 1
                         if dry_run:
@@ -116,7 +120,10 @@ def run(
                         continue
 
                     art = parse_article(ahtml, art_url, fallback_title=title)
-                    variety = refine_variety(src["variety"], art.title)
+                    classification_text = art.title
+                    if len(src["variety"]) > 1:
+                        classification_text += " " + (art.ai_summary or art.body_text[:500])
+                    variety = refine_variety(src["variety"], classification_text)
 
                     if dry_run:
                         st["new"] += 1
@@ -133,7 +140,6 @@ def run(
                         report_type=src["report_type"],
                         source_channel=src["channel"],
                         source_id=sid,
-                        priority=src.get("priority", "optional"),
                     )
                     if added:
                         export_markdown(
