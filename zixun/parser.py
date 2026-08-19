@@ -51,6 +51,16 @@ class ArticleData:
     body_text: str
     ai_summary: str | None
     source: str | None
+    # Optional explicit metadata. The parser only accepts fields published by
+    # the page/ingestion layer; it never infers an event date from prose.
+    observation_start: str | None = None
+    observation_end: str | None = None
+    event_time: str | None = None
+    available_at: str | None = None
+    event_type: str | None = None
+    event_key: str | None = None
+    information_increment: bool | None = None
+    price_echo: bool | None = None
 
 
 def parse_list_page(
@@ -87,6 +97,29 @@ def _clean_text(s: str) -> str:
             continue
         lines.append(line)
     return "\n".join(lines)
+
+
+def _explicit_meta(soup: BeautifulSoup, *names: str) -> str | None:
+    """Read a named metadata value without interpreting article prose."""
+    wanted = {name.lower() for name in names}
+    for node in soup.find_all("meta"):
+        name = str(node.get("name") or node.get("property") or "").lower()
+        if name in wanted and node.get("content"):
+            value = str(node["content"]).strip()
+            if value:
+                return value
+    return None
+
+
+def _explicit_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "y", "是", "有"}:
+        return True
+    if text in {"0", "false", "no", "n", "否", "无"}:
+        return False
+    return None
 
 
 def parse_article(html: str, url: str, fallback_title: str = "") -> ArticleData:
@@ -182,6 +215,22 @@ def parse_article(html: str, url: str, fallback_title: str = "") -> ArticleData:
         source = src_node.get_text(strip=True)
         source = re.sub(r"^来源[：:]\s*", "", source).strip() or None
 
+    # These names are intentionally opt-in metadata. Mysteel pages in the
+    # current corpus do not expose most of them, so they remain null and the
+    # alignment layer falls back to publish_time only.
+    observation_start = _explicit_meta(
+        soup, "observation_start", "observation-start"
+    )
+    observation_end = _explicit_meta(soup, "observation_end", "observation-end")
+    event_time = _explicit_meta(soup, "event_time", "event-time")
+    available_at = _explicit_meta(soup, "available_at", "available-at")
+    event_type = _explicit_meta(soup, "event_type", "event-type")
+    event_key = _explicit_meta(soup, "event_key", "event-key")
+    information_increment = _explicit_bool(
+        _explicit_meta(soup, "information_increment", "information-increment")
+    )
+    price_echo = _explicit_bool(_explicit_meta(soup, "price_echo", "price-echo"))
+
     return ArticleData(
         url=url,
         title=title,
@@ -189,4 +238,12 @@ def parse_article(html: str, url: str, fallback_title: str = "") -> ArticleData:
         body_text=body_text,
         ai_summary=ai_summary,
         source=source,
+        observation_start=observation_start,
+        observation_end=observation_end,
+        event_time=event_time,
+        available_at=available_at,
+        event_type=event_type,
+        event_key=event_key,
+        information_increment=information_increment,
+        price_echo=price_echo,
     )

@@ -66,7 +66,7 @@ def env_path(name: str, default: Path) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
-def env_optional_path(name: str) -> Path | None:
+def env_path_or_none(name: str) -> Path | None:
     """读取可为空的路径环境变量。"""
     value = os.getenv(name)
     if value is None or not value.strip():
@@ -101,7 +101,7 @@ FORECAST_LOG = env_path("ZIXUN_FORECAST_LOG", LOGS_DIR / "forecast.log")
 # KRONOS_PYTHON 默认使用启动面板的同一个解释器。
 KRONOS_PYTHON = env_path("KRONOS_PYTHON", Path(sys.executable))
 KRONOS_DEVICE = env_str("KRONOS_DEVICE", "auto")
-KRONOS_CACHE_DIR = env_optional_path("KRONOS_CACHE_DIR")
+KRONOS_CACHE_DIR = env_path_or_none("KRONOS_CACHE_DIR")
 KRONOS_LOCAL_FILES_ONLY = env_bool("KRONOS_LOCAL_FILES_ONLY", False)
 
 # 品种中文显示名（面板用）

@@ -21,6 +21,8 @@ from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 
+from zixun.time_alignment import SHANGHAI, bar_close_time, parse_shanghai_datetime
+
 
 KRONOS_COLOR = "#2563eb"
 CALIBRATED_COLOR = "#d97706"  # amber: deliberately distinct from blue / black
@@ -38,13 +40,11 @@ def _read_json_object(path: Path | str, *, label: str) -> dict[str, Any]:
 
 def _as_timestamp(value: Any, *, field: str) -> pd.Timestamp:
     try:
-        timestamp = pd.Timestamp(value)
+        timestamp = pd.Timestamp(parse_shanghai_datetime(value, required=True))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field}不是有效时间：{value!r}") from exc
     if pd.isna(timestamp):
         raise ValueError(f"{field}不是有效时间：{value!r}")
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_localize(None)
     return timestamp
 
 
@@ -101,7 +101,7 @@ def _load_context(
         raise ValueError("K 线源文件没有可用记录")
     frame["timestamp"] = pd.to_datetime(
         frame["timestamp"], format="%Y%m%d %H:%M:%S", errors="coerce"
-    )
+    ).dt.tz_localize(SHANGHAI)
     frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
     frame = frame.dropna().sort_values("timestamp", kind="stable")
     frame = frame.loc[frame["timestamp"] <= origin_timestamp].tail(max(lookback, 1))
@@ -200,7 +200,8 @@ def render_calibrated_forecast_plot(
         raise ValueError("forecast_result缺少 kronos 对象")
 
     origin_timestamp = _as_timestamp(
-        kronos.get("origin_timestamp"), field="kronos.origin_timestamp"
+        kronos.get("forecast_origin") or kronos.get("origin_timestamp"),
+        field="kronos.forecast_origin",
     )
     origin_close = _as_finite_float(
         kronos.get("origin_close"), field="kronos.origin_close"
@@ -211,20 +212,29 @@ def render_calibrated_forecast_plot(
     raw_timestamps = kronos.get("target_timestamps")
     if not isinstance(raw_timestamps, list) or not raw_timestamps:
         raise ValueError("kronos.target_timestamps必须是非空列表")
-    target_timestamps = pd.DatetimeIndex(
+    target_bar_timestamps = pd.DatetimeIndex(
         [_as_timestamp(value, field="kronos.target_timestamps") for value in raw_timestamps]
     )
     day_end_indices = kronos.get("day_end_indices")
     if not isinstance(day_end_indices, list):
         raise ValueError("kronos.day_end_indices必须是列表")
 
-    expected_length = len(target_timestamps)
+    expected_length = len(target_bar_timestamps)
     actual_close = _close_path(kronos, "actual_path", expected_length)
     q10_close = _close_path(kronos, "q10_path", expected_length)
     q50_close = _close_path(kronos, "median_path", expected_length)
     predicted_close = _close_path(kronos, "predicted_path", expected_length)
     q90_close = _close_path(kronos, "q90_path", expected_length)
-    forecast_x = pd.DatetimeIndex([origin_timestamp, *target_timestamps.tolist()])
+    raw_close_timestamps = kronos.get("target_close_timestamps")
+    if isinstance(raw_close_timestamps, list) and len(raw_close_timestamps) == expected_length:
+        target_close_timestamps = pd.DatetimeIndex(
+            [_as_timestamp(value, field="kronos.target_close_timestamps") for value in raw_close_timestamps]
+        )
+    else:
+        target_close_timestamps = pd.DatetimeIndex(
+            [bar_close_time(value) for value in target_bar_timestamps]
+        )
+    forecast_x = pd.DatetimeIndex([origin_timestamp, *target_close_timestamps.tolist()])
     actual_y = np.concatenate(([0.0], actual_close / origin_close - 1.0))
     q10_y = np.concatenate(([0.0], q10_close / origin_close - 1.0))
     q50_y = np.concatenate(([0.0], q50_close / origin_close - 1.0))
@@ -273,7 +283,7 @@ def render_calibrated_forecast_plot(
 
     for day_end in day_end_indices[:-1]:
         axis.axvline(
-            target_timestamps[day_end], color="#9ca3af", linewidth=0.9, linestyle=":"
+            target_close_timestamps[day_end], color="#9ca3af", linewidth=0.9, linestyle=":"
         )
     target_days = kronos.get("target_days") or []
     sample_count = config.get("sample_count") if isinstance(config, Mapping) else None

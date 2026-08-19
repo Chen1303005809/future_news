@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 import yaml
@@ -19,6 +20,7 @@ from zixun.settings import (
     env_int,
     env_str,
 )
+from zixun.time_alignment import AlignmentPolicy
 
 DEFAULT_CONFIG_PATH = ROOT / "config" / "calibration.yaml"
 
@@ -65,6 +67,7 @@ class CalibrationConfig:
     max_return_shift: float = DEFAULT_MAX_RETURN_SHIFT
     prob_clamp: tuple[float, float] = DEFAULT_PROB_CLAMP
     return_clamp: tuple[float, float] = DEFAULT_RETURN_CLAMP
+    alignment_policy: AlignmentPolicy = field(default_factory=AlignmentPolicy)
 
     @classmethod
     def _from_yaml(cls, path: Path | str | None = None) -> "CalibrationConfig":
@@ -81,9 +84,28 @@ class CalibrationConfig:
         retrieval = data.get("retrieval", {}) or {}
         llm = data.get("llm", {}) or {}
         calib = data.get("calibration", {}) or {}
+        time_alignment = data.get("time_alignment", {}) or {}
 
         prob_clamp = tuple(calib.get("prob_clamp", DEFAULT_PROB_CLAMP))
         return_clamp = tuple(calib.get("return_clamp", DEFAULT_RETURN_CLAMP))
+        windows_raw = time_alignment.get("impact_window_hours", {}) or {}
+        if not isinstance(windows_raw, dict):
+            raise ValueError("time_alignment.impact_window_hours 必须是对象")
+        windows = {
+            str(event_type): (
+                None if hours is None else float(hours)
+            )
+            for event_type, hours in windows_raw.items()
+        }
+        alignment_policy = AlignmentPolicy(
+            timezone_name=str(
+                time_alignment.get("timezone", "Asia/Shanghai")
+            ),
+            bar_duration=timedelta(
+                minutes=int(time_alignment.get("bar_duration_minutes", 60))
+            ),
+            impact_window_hours=windows,
+        )
 
         return cls(
             lookback_days=int(retrieval.get("lookback_days", DEFAULT_LOOKBACK_DAYS)),
@@ -104,6 +126,7 @@ class CalibrationConfig:
             ),
             prob_clamp=prob_clamp,  # type: ignore[arg-type]
             return_clamp=return_clamp,  # type: ignore[arg-type]
+            alignment_policy=alignment_policy,
         )
 
     @classmethod
@@ -118,7 +141,9 @@ class CalibrationConfig:
         环境变量命名空间为 ``CALIBRATION_*``。这样既能避免把 API key
         写入 YAML，也能在不同机器/进程间切换端点和超时配置。
         """
-        base = cls._from_yaml(path) if path is not None else cls()
+        # YAML supplies stable defaults such as the time-alignment policy;
+        # environment variables still override every runtime setting.
+        base = cls._from_yaml(path or DEFAULT_CONFIG_PATH)
 
         prob_clamp = _env_pair(
             "CALIBRATION_PROB_CLAMP", base.prob_clamp
@@ -163,6 +188,7 @@ class CalibrationConfig:
             ),
             prob_clamp=prob_clamp,
             return_clamp=return_clamp,
+            alignment_policy=base.alignment_policy,
         )
 
     def replace(self, **kwargs) -> "CalibrationConfig":

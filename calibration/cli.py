@@ -131,6 +131,8 @@ def _run_calibration(
         lookback_days=config.lookback_days,
         max_articles=config.max_articles,
         fallback_to_black_sector=config.fallback_to_black_sector,
+        endpoints=snapshot.endpoints,
+        alignment_policy=config.alignment_policy,
     )
     logger.info(
         "品种=%s 窗口=%s ~ %s 命中=%d 条，过滤后 %d 条%s",
@@ -139,7 +141,12 @@ def _run_calibration(
     )
 
     # 3a. 目标品种无数据且未兜底 → 退出
-    if not digests and meta.variety_queried and not meta.variety_fallback:
+    if (
+        not digests
+        and meta.variety_queried
+        and not meta.variety_fallback
+        and meta.abstain_reason not in {"missing_publish_time", "no_eligible_articles"}
+    ):
         logger.warning(
             "品种 %s 在窗口内无资讯（兜底已关闭），跳过校准", variety
         )
@@ -148,16 +155,17 @@ def _run_calibration(
     # 4. 无资讯 → 跳过校准，透传原值
     if not digests:
         logger.warning("时间窗口内无相关资讯，跳过校准（透传模型原值）")
+        skip_reason = meta.abstain_reason or "no_articles"
         result = _passthrough_result(
             snapshot,
             view="range",
             confidence=0.0,
-            commentary="时间窗口内无相关资讯，跳过校准",
-            llm_meta={"skipped": "no_articles"},
+            commentary=f"无可用资讯（{skip_reason}），跳过校准",
+            llm_meta={"skipped": skip_reason},
         )
         output = build_output(
             snapshot, result, config,
-            skipped_reason="no_articles",
+            skipped_reason=skip_reason,
         )
         write_calibration(output, output_path)
         logger.info("已写出 %s（未校准）", output_path)

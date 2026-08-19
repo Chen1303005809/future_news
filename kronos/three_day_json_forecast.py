@@ -38,6 +38,7 @@ from zixun.settings import (
     KRONOS_DEVICE,
     KRONOS_LOCAL_FILES_ONLY,
 )
+from zixun.time_alignment import DEFAULT_BAR_DURATION, SHANGHAI
 
 
 MODEL_FEATURES = ["open", "high", "low", "close", "volume", "amount"]
@@ -244,6 +245,11 @@ def _parse_provider_payload(path: str | Path) -> tuple[pd.DataFrame, dict[str, o
         frame["calendar_day"].astype(str) + " " + frame["bar_time"].astype(str),
         format="%Y%m%d %H:%M:%S",
         errors="raise",
+    ).dt.tz_localize(SHANGHAI)
+    # Provider T is the bar start label. C becomes observable at the end of
+    # the hourly bar, so the 14:00 bar closes at 15:00.
+    frame["close_timestamps"] = frame["timestamps"] + pd.Timedelta(
+        DEFAULT_BAR_DURATION
     )
     frame["trading_day"] = pd.to_datetime(
         frame["trading_day_raw"].astype(str), format="%Y%m%d", errors="raise"
@@ -261,6 +267,7 @@ def _parse_provider_payload(path: str | Path) -> tuple[pd.DataFrame, dict[str, o
         [
             "instrument",
             "timestamps",
+            "close_timestamps",
             "trading_day",
             *MODEL_FEATURES,
             "open_interest",
@@ -284,7 +291,7 @@ def _parse_provider_payload(path: str | Path) -> tuple[pd.DataFrame, dict[str, o
 def _validate_frame(frame: pd.DataFrame) -> None:
     if frame.empty:
         raise ValueError("K-line payload contains no bars")
-    if frame[MODEL_FEATURES + ["timestamps", "trading_day"]].isna().any().any():
+    if frame[MODEL_FEATURES + ["timestamps", "close_timestamps", "trading_day"]].isna().any().any():
         raise ValueError("K-line payload contains missing model fields")
     if frame["timestamps"].duplicated().any():
         raise ValueError("K-line payload contains duplicate timestamps")
@@ -304,8 +311,14 @@ def _clean_structural_anomalies(
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     valid_counts = {int(value) for value in valid_bar_counts}
     day_counts = frame.groupby("trading_day", sort=True).size()
-    invalid_counts = day_counts.loc[~day_counts.isin(valid_counts)]
-    valid_days = day_counts.loc[day_counts.isin(valid_counts)].index
+    has_day_close_bar = frame.groupby("trading_day")["bar_time"].apply(
+        lambda values: "14:00:00" in set(values)
+    )
+    valid_mask = day_counts.isin(valid_counts) & has_day_close_bar.reindex(
+        day_counts.index, fill_value=False
+    )
+    invalid_counts = day_counts.loc[~valid_mask]
+    valid_days = day_counts.loc[valid_mask].index
     cleaned = frame.loc[frame["trading_day"].isin(valid_days)].copy()
     cleaned = cleaned.sort_values("timestamps", kind="stable").reset_index(drop=True)
     audit = {
@@ -319,7 +332,15 @@ def _clean_structural_anomalies(
             for count in sorted(valid_counts)
         },
         "removed_days": [
-            {"trading_day": day.strftime("%Y-%m-%d"), "bars": int(count)}
+            {
+                "trading_day": day.strftime("%Y-%m-%d"),
+                "bars": int(count),
+                "reason": (
+                    "missing_15_00_day_close_bar"
+                    if not bool(has_day_close_bar.get(day, False))
+                    else "unexpected_bar_count"
+                ),
+            }
             for day, count in invalid_counts.items()
         ],
         "first_timestamp": (
@@ -372,7 +393,9 @@ def _build_cases(
         cases.append(
             TradingDayCase(
                 instrument=instrument,
-                origin_timestamp=pd.Timestamp(context["timestamps"].iloc[-1]),
+                # Forecast origin is when the last observed C is complete,
+                # not the provider's bar-start label.
+                origin_timestamp=pd.Timestamp(context["close_timestamps"].iloc[-1]),
                 origin_trading_day=pd.Timestamp(context["trading_day"].iloc[-1]).normalize(),
                 context=context,
                 target=target,
@@ -566,10 +589,16 @@ def _case_record(
         "instrument": case.instrument,
         "split": case.split,
         "origin_timestamp": case.origin_timestamp,
-        "origin_trading_day": case.origin_trading_day,
-        "target_day": case.target_days[0],
-        "target_days": case.target_days,
+        "forecast_origin": case.origin_timestamp,
+        "origin_trading_day": case.origin_trading_day.date().isoformat(),
+        "target_day": case.target_days[0].date().isoformat(),
+        "target_days": [day.date().isoformat() for day in case.target_days],
         "target_timestamps": case.target["timestamps"].tolist(),
+        "target_close_timestamps": case.target["close_timestamps"].tolist(),
+        "target_close_at": [
+            case.target["close_timestamps"].iloc[index]
+            for index in case.day_end_indices
+        ],
         "pred_len": case.pred_len,
         "day_end_indices": case.day_end_indices,
         "point_estimate": point_estimate,
@@ -885,6 +914,7 @@ def build_path_table(
     table: dict[str, object] = {
         "bar_index": np.arange(len(target), dtype=np.int64),
         "timestamp": target["timestamps"].tolist(),
+        "close_timestamp": target["close_timestamps"].tolist(),
         "trading_day": target["trading_day"].tolist(),
         "day_number": [target_days.index(pd.Timestamp(day).normalize()) + 1 for day in target["trading_day"]],
     }
@@ -932,9 +962,16 @@ def run_native_three_day_forecast(
         },
         "target": {
             "origin_timestamp": prepared.target_case.origin_timestamp,
-            "origin_trading_day": prepared.target_case.origin_trading_day,
-            "target_days": list(prepared.target_case.target_days),
+            "forecast_origin": prepared.target_case.origin_timestamp,
+            "origin_trading_day": prepared.target_case.origin_trading_day.date().isoformat(),
+            "target_days": [
+                day.date().isoformat() for day in prepared.target_case.target_days
+            ],
             "day_end_indices": list(prepared.target_case.day_end_indices),
+            "target_close_at": [
+                prepared.target_case.target["close_timestamps"].iloc[index]
+                for index in prepared.target_case.day_end_indices
+            ],
             "pred_len": prepared.target_case.pred_len,
         },
     }
@@ -961,7 +998,7 @@ def plot_three_day_forecast(result: ThreeDayForecastResult, output_path: str | P
     kronos = _record_dict(result.kronos_records)
     origin_close = float(context["close"].iloc[-1])
     forecast_x = pd.DatetimeIndex(
-        [pd.Timestamp(prepared.target_case.origin_timestamp), *pd.DatetimeIndex(target["timestamps"]).tolist()]
+        [pd.Timestamp(prepared.target_case.origin_timestamp), *pd.DatetimeIndex(target["close_timestamps"]).tolist()]
     )
     actual_y = np.concatenate(([0.0], _relative_close(target["close"], origin_close)))
     q10_y = np.concatenate(([0.0], _relative_close(_feature_array(kronos, "q10_path")[:, 3], origin_close)))
@@ -973,7 +1010,7 @@ def plot_three_day_forecast(result: ThreeDayForecastResult, output_path: str | P
     axis.fill_between(forecast_x, q10_y, q90_y, color="#2563eb", alpha=0.18, label="Kronos 10–90%")
     axis.plot(forecast_x, q50_y, color="#2563eb", linewidth=2.0, linestyle="-", label="Kronos median")
     for day_end in prepared.target_case.day_end_indices[:-1]:
-        axis.axvline(pd.Timestamp(target["timestamps"].iloc[day_end]), color="#9ca3af", linewidth=0.9, linestyle=":")
+        axis.axvline(pd.Timestamp(target["close_timestamps"].iloc[day_end]), color="#9ca3af", linewidth=0.9, linestyle=":")
     target_days = [day.strftime("%Y-%m-%d") for day in prepared.target_case.target_days]
     axis.axhline(0.0, color="#9ca3af", linewidth=0.8)
     axis.set_title(f"{prepared.instrument} · standalone native Kronos forecast\ntarget: {', '.join(target_days)} · samples={result.config.sample_count}")
@@ -995,8 +1032,9 @@ def plot_three_day_forecast(result: ThreeDayForecastResult, output_path: str | P
 
 def _record_summary(record: Mapping[str, object]) -> dict[str, object]:
     fields = (
-        "model", "instrument", "split", "origin_timestamp", "origin_trading_day",
-        "target_day", "target_days", "target_timestamps", "pred_len", "day_end_indices",
+        "model", "instrument", "split", "origin_timestamp", "forecast_origin", "origin_trading_day",
+        "target_day", "target_days", "target_timestamps", "target_close_timestamps",
+        "target_close_at", "pred_len", "day_end_indices",
         "point_estimate", "sampling_seed", "origin_close", "sample_paths", "raw_sample_paths",
         "mean_path", "median_path", "q10_path", "q90_path", "predicted_path", "actual_path",
         "sample_endpoint_returns", "day1_up_probability", "day2_up_probability", "day3_up_probability",

@@ -64,6 +64,9 @@ def list_articles(
     sql = f"""
         SELECT id, url, title, variety, report_type, source_channel, source_id,
                publish_time, ai_summary,
+               observation_start, observation_end, event_time, available_at,
+               event_type, event_key, information_increment, price_echo,
+               conclusion_delay_hours,
                substr(body_text, 1, 160) AS preview,
                length(body_text) AS body_len
         FROM articles WHERE {where}

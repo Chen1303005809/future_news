@@ -3,8 +3,14 @@
   "config": {"lookback": 256, "sample_count": 100, "model_id": "NeoQuasar/Kronos-small"},
   "target": {
     "origin_timestamp": "2026-08-13T22:00:00",
+    "forecast_origin": "2026-08-13T22:00:00+08:00",
     "origin_trading_day": "2026-08-13",
     "target_days": ["2026-08-14", "2026-08-17", "2026-08-18"],
+    "target_close_at": [
+      "2026-08-14T15:00:00+08:00",
+      "2026-08-17T15:00:00+08:00",
+      "2026-08-18T15:00:00+08:00"
+    ],
     "day_end_indices": [6, 13, 19],
     "pred_len": 20
   },
@@ -12,8 +18,14 @@
     "model": "kronos",
     "instrument": "i2609",
     "origin_timestamp": "2026-08-13T22:00:00",
+    "forecast_origin": "2026-08-13T22:00:00+08:00",
     "origin_trading_day": "2026-08-13",
     "target_days": ["2026-08-14", "2026-08-17", "2026-08-18"],
+    "target_close_at": [
+      "2026-08-14T15:00:00+08:00",
+      "2026-08-17T15:00:00+08:00",
+      "2026-08-18T15:00:00+08:00"
+    ],
     "day_end_indices": [6, 13, 19],
     "pred_len": 20,
     "point_estimate": "median",

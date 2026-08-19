@@ -13,7 +13,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+
+from zixun.time_alignment import (
+    DEFAULT_BAR_DURATION,
+    ForecastEndpoint,
+    bar_close_time,
+    format_shanghai_datetime,
+    parse_shanghai_datetime,
+)
 
 CLOSE_FEATURE_INDEX = 3  # MODEL_FEATURES = [open, high, low, close, volume, amount]
 
@@ -31,6 +40,7 @@ class DayForecast:
     predicted_return: float
     # predicted_return 的来源：metrics(回测现成) | predicted_path | median_path | mean_path
     predicted_return_source: str
+    target_close_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +53,24 @@ class ForecastSnapshot:
     origin_close: float
     target_days: tuple[str, ...]   # 3 个目标交易日
     days: tuple[DayForecast, DayForecast, DayForecast]
+    target_close_at: tuple[datetime, datetime, datetime] = ()
+
+    @property
+    def forecast_origin(self) -> datetime:
+        """Aware Asia/Shanghai prediction generation time."""
+        return parse_shanghai_datetime(self.origin_timestamp, required=True)
+
+    @property
+    def endpoints(self) -> tuple[ForecastEndpoint, ...]:
+        return tuple(
+            ForecastEndpoint(
+                index=index,
+                day=index + 1,
+                trading_day=self.target_days[index],
+                target_close_at=value,
+            )
+            for index, value in enumerate(self.target_close_at)
+        )
 
 
 def _compute_returns_from_path(
@@ -133,12 +161,78 @@ def _extract_probabilities(kronos_block: dict) -> list[float]:
 
 
 def _normalize_target_days(target_days) -> tuple[str, ...]:
-    """target_days 可能是 ISO 字符串或 Timestamp 序列化的带 T 字符串，统一成 YYYY-MM-DD。"""
+    """Normalize trading-day labels to local ``YYYY-MM-DD`` strings."""
     out = []
     for d in target_days:
-        s = str(d)
-        out.append(s[:10])  # 截到日期部分
+        parsed = parse_shanghai_datetime(d)
+        out.append(parsed.date().isoformat() if parsed else str(d)[:10])
     return tuple(out)
+
+
+def _extract_target_close_at(
+    kronos_block: dict,
+    target_days: tuple[str, ...],
+) -> tuple[datetime, datetime, datetime]:
+    """Read explicit endpoint times, with a conservative legacy adapter."""
+    raw_explicit = kronos_block.get("target_close_at")
+    if isinstance(raw_explicit, list) and len(raw_explicit) == 3:
+        values = tuple(
+            parse_shanghai_datetime(value, required=True) for value in raw_explicit
+        )
+        return values  # type: ignore[return-value]
+
+    indices = kronos_block.get("day_end_indices")
+    if not isinstance(indices, list) or len(indices) != 3:
+        raise ForecastLoadError(
+            "缺少 kronos.target_close_at；legacy 预测至少需要 day_end_indices"
+        )
+
+    # New producer field: close timestamps for every predicted bar.
+    raw_close_timestamps = kronos_block.get("target_close_timestamps")
+    if isinstance(raw_close_timestamps, list):
+        try:
+            values = tuple(
+                parse_shanghai_datetime(raw_close_timestamps[int(index)], required=True)
+                for index in indices
+            )
+            return values  # type: ignore[return-value]
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ForecastLoadError("kronos.target_close_timestamps 结构非法") from exc
+
+    # Legacy artifacts only contain bar starts. The project K-line contract is
+    # hourly and T is the bar start, so derive the real close at T + 1 hour.
+    raw_timestamps = kronos_block.get("target_timestamps")
+    if isinstance(raw_timestamps, list):
+        try:
+            bar_starts = [
+                parse_shanghai_datetime(raw_timestamps[int(index)], required=True)
+                for index in indices
+            ]
+            if any(value.strftime("%H:%M:%S") != "14:00:00" for value in bar_starts):
+                raise ForecastLoadError(
+                    "legacy 预测端点未到 14:00 日盘收盘，必须重新生成 K 线预测"
+                )
+            values = tuple(
+                bar_close_time(value, duration=DEFAULT_BAR_DURATION)
+                for value in bar_starts
+            )
+            return values  # type: ignore[return-value]
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ForecastLoadError("kronos.target_timestamps 结构非法") from exc
+
+    # Old backtest fixtures did not retain target bar timestamps. Their
+    # target_days are already provider trading-day labels, so retain a
+    # compatibility adapter at the known 15:00 daily close and make the
+    # omission visible in the caller's legacy artifact audit. New artifacts
+    # always carry explicit target_close_at and never use this path.
+    if len(target_days) == 3:
+        values = tuple(
+            parse_shanghai_datetime(f"{day[:10]} 15:00:00", required=True)
+            for day in target_days
+        )
+        return values  # type: ignore[return-value]
+
+    raise ForecastLoadError("无法确定三日真实 target_close_at")
 
 
 def load_forecast(path: Path | str) -> ForecastSnapshot:
@@ -163,11 +257,17 @@ def load_forecast(path: Path | str) -> ForecastSnapshot:
     if not instrument:
         raise ForecastLoadError("缺少 instrument（kronos.instrument / source.instrument）")
 
-    origin_timestamp = kronos_block.get("origin_timestamp")
+    origin_timestamp = kronos_block.get("forecast_origin") or kronos_block.get(
+        "origin_timestamp"
+    )
     if not origin_timestamp:
-        raise ForecastLoadError("缺少 kronos.origin_timestamp")
+        raise ForecastLoadError("缺少 kronos.forecast_origin/origin_timestamp")
+    forecast_origin = parse_shanghai_datetime(
+        kronos_block.get("forecast_origin") or origin_timestamp,
+        required=True,
+    )
     origin_trading_day = str(
-        kronos_block.get("origin_trading_day") or str(origin_timestamp)[:10]
+        kronos_block.get("origin_trading_day") or forecast_origin.date().isoformat()
     )
 
     target_days_raw = kronos_block.get("target_days")
@@ -181,6 +281,7 @@ def load_forecast(path: Path | str) -> ForecastSnapshot:
 
     probs = _extract_probabilities(kronos_block)
     returns, sources = _extract_predicted_returns(kronos_block, payload.get("metrics"))
+    target_close_at = _extract_target_close_at(kronos_block, target_days)
 
     days = tuple(
         DayForecast(
@@ -188,15 +289,17 @@ def load_forecast(path: Path | str) -> ForecastSnapshot:
             up_probability=probs[i],
             predicted_return=returns[i],
             predicted_return_source=sources[i],
+            target_close_at=target_close_at[i],
         )
         for i in range(3)
     )
 
     return ForecastSnapshot(
         instrument=str(instrument),
-        origin_timestamp=str(origin_timestamp),
+        origin_timestamp=format_shanghai_datetime(forecast_origin) or str(origin_timestamp),
         origin_trading_day=origin_trading_day,
         origin_close=float(origin_close),
         target_days=target_days,
         days=days,
+        target_close_at=target_close_at,
     )

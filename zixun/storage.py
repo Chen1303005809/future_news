@@ -8,6 +8,24 @@ from pathlib import Path
 
 from .parser import ArticleData
 from .settings import ARTICLES_DIR, DATA_DIR, DB_PATH
+from .time_alignment import (
+    SHANGHAI,
+    article_timing_from_row,
+    format_sql_local_datetime,
+)
+
+
+ARTICLE_METADATA_COLUMNS = {
+    "observation_start": "TEXT",
+    "observation_end": "TEXT",
+    "event_time": "TEXT",
+    "available_at": "TEXT",
+    "event_type": "TEXT",
+    "event_key": "TEXT",
+    "information_increment": "INTEGER",
+    "price_echo": "INTEGER",
+    "conclusion_delay_hours": "REAL",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -22,13 +40,37 @@ CREATE TABLE IF NOT EXISTS articles (
   publish_time   DATETIME,
   fetched_at     DATETIME NOT NULL,
   ai_summary     TEXT,
-  body_text      TEXT
+  body_text      TEXT,
+  observation_start TEXT,
+  observation_end TEXT,
+  event_time     TEXT,
+  available_at   TEXT,
+  event_type     TEXT,
+  event_key      TEXT,
+  information_increment INTEGER,
+  price_echo     INTEGER,
+  conclusion_delay_hours REAL
 );
 CREATE INDEX IF NOT EXISTS idx_variety_time ON articles(variety, publish_time);
 CREATE INDEX IF NOT EXISTS idx_time         ON articles(publish_time);
 CREATE INDEX IF NOT EXISTS idx_report       ON articles(report_type, publish_time);
 CREATE INDEX IF NOT EXISTS idx_url_hash     ON articles(url_hash);
+CREATE INDEX IF NOT EXISTS idx_available_time ON articles(available_at);
 """
+
+
+def _ensure_article_metadata_columns(conn: sqlite3.Connection) -> None:
+    """Add only nullable metadata columns; never rewrite/drop legacy columns."""
+    existing = {
+        row[1] for row in conn.execute("PRAGMA table_info(articles)").fetchall()
+    }
+    for name, sql_type in ARTICLE_METADATA_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE articles ADD COLUMN {name} {sql_type}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_available_time ON articles(available_at)"
+    )
+    conn.commit()
 
 
 def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -36,12 +78,32 @@ def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    # Existing deployments may have a retired tier column and none of the
+    # timing columns. Migration is additive and does not read/remove old data.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            url_hash TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            variety TEXT NOT NULL,
+            report_type TEXT,
+            source_channel TEXT,
+            source_id TEXT,
+            publish_time DATETIME,
+            fetched_at DATETIME NOT NULL,
+            ai_summary TEXT,
+            body_text TEXT
+        )"""
+    )
+    _ensure_article_metadata_columns(conn)
     return conn
 
 
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     conn.executescript(SCHEMA)
+    _ensure_article_metadata_columns(conn)
     conn.commit()
     conn.close()
 
@@ -68,17 +130,44 @@ def insert_article(
 ) -> bool:
     """入库一篇文章。已存在则跳过。返回是否新增。"""
     h = hash_url(article.url)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(SHANGHAI).isoformat(timespec="seconds")
+    timing = article_timing_from_row(
+        {
+            "title": article.title,
+            "report_type": report_type,
+            "source_id": source_id,
+            "publish_time": article.publish_time,
+            "observation_start": article.observation_start,
+            "observation_end": article.observation_end,
+            "event_time": article.event_time,
+            "available_at": article.available_at,
+            "event_type": article.event_type,
+            "event_key": article.event_key,
+            "information_increment": article.information_increment,
+            "price_echo": article.price_echo,
+        }
+    )
     cur = conn.execute(
         """INSERT OR IGNORE INTO articles
            (url, url_hash, title, variety, report_type, source_channel, source_id,
-            publish_time, fetched_at, ai_summary, body_text)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            publish_time, fetched_at, ai_summary, body_text,
+            observation_start, observation_end, event_time, available_at,
+            event_type, event_key, information_increment, price_echo,
+            conclusion_delay_hours)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             article.url, h, article.title, ",".join(variety),
             report_type, source_channel, source_id,
-            article.publish_time, now, article.ai_summary,
-            article.body_text,
+            article.publish_time, now, article.ai_summary, article.body_text,
+            format_sql_local_datetime(timing.observation_start),
+            format_sql_local_datetime(timing.observation_end),
+            format_sql_local_datetime(timing.event_time),
+            format_sql_local_datetime(timing.available_at),
+            timing.event_type,
+            timing.event_key,
+            (None if timing.information_increment is None else int(timing.information_increment)),
+            int(timing.price_echo),
+            timing.conclusion_delay_hours,
         ),
     )
     conn.commit()

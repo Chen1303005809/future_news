@@ -314,12 +314,20 @@ OPENAI_API_KEY="<your-api-key>"
 | `report_type` | 报告类型。 |
 | `source_channel` | 来源频道。 |
 | `source_id` | 对应 `sources.yaml` 的栏目 ID。 |
-| `publish_time` | 文章发布时间，通常为 `YYYY-MM-DD HH:MM:SS`；当前不带时区。 |
+| `publish_time` | Mysteel 文章发布时间；旧库通常为 `YYYY-MM-DD HH:MM:SS` 本地字符串。 |
+| `observation_start`, `observation_end` | 文章明确声明的事实观察区间，可为空；不会从标题臆造。 |
+| `event_time` | 事件实际发生时间，可为空。 |
+| `available_at` | 系统最早可用时间，默认不早于 `publish_time`。 |
+| `event_type`, `event_key` | 内容事件分类和同一事件的运行时/可空去重键。 |
+| `price_echo` | 价格复述标记；日报/行情复盘默认显著降权或 abstain。 |
+| `conclusion_delay_hours` | 观察结束到发布时间的延迟，可为空。 |
 | `fetched_at` | 抓取入库时间。 |
 | `ai_summary` | Mysteel AI 摘要。 |
 | `body_text` | 清洗后的正文；正文过短时回退到 AI 摘要。 |
 
-主要索引为 `(variety, publish_time)`、`publish_time`、`(report_type, publish_time)` 和 `url_hash`。`publish_time` 是后续按日聚合和与 K 线对齐的关键字段。
+主要索引为 `(variety, publish_time)`、`publish_time`、`(report_type, publish_time)`、
+`available_at` 和 `url_hash`。SQL 仍使用旧本地字符串做粗筛，真正对齐统一在
+`zixun.time_alignment` 中转换为 `Asia/Shanghai` aware 时间。
 
 ### Markdown 文章
 
@@ -345,11 +353,11 @@ articles/<primary_variety>/<YYYY-MM-DD>/<url_tail>.md
 
 每个合约产物位于 `outputs/<contract>/`：
 
-- `forecast_result.json`：输入审计、模型配置、预测起点、目标三日、采样路径和概率/收益率等核心结果。
+- `forecast_result.json`：输入审计、模型配置、带时区的 `forecast_origin`、三个真实 `target_close_at`、采样路径和概率/收益率等核心结果。
 - `metrics.json`：Kronos 与基线模型的 MAE、RMSE、方向命中、区间覆盖等指标。
 - `forecast_paths.csv`：预测路径明细。
 - `forecast_plot.png`：三日预测图。
-- `calibration.json`：LLM 研判、原始预测、校准预测、实际应用偏移和来源资讯。
+- `calibration.json`：LLM 研判、原始预测、校准预测、实际应用偏移和带 `available_at`/有效年龄/可影响端点的来源资讯。
 
 ## 7. 后台任务、状态和日志
 

@@ -134,6 +134,7 @@ zixun/
 │   ├── classifier.py       # 品种分类
 │   ├── filters.py          # 抓取筛选（地区/排除/白名单）
 │   ├── storage.py          # SQLite 存储 + Markdown 导出
+│   ├── time_alignment.py   # Asia/Shanghai 时间语义与端点映射
 │   ├── pipeline.py         # 抓取主流程
 │   ├── queries.py          # 面板数据查询
 │   ├── runner.py           # 面板触发的后台抓取执行器
@@ -160,6 +161,12 @@ zixun/
 | `source_channel` | 频道：`jiancai` / `tks` / `coal` / `list1` |
 | `source_id` | 栏目 id（对应 `sources.yaml`） |
 | `publish_time` | 精确发布时间（与 K 线对齐用） |
+| `observation_start`, `observation_end` | 文章明确给出的事实观察区间；未知时为空 |
+| `event_time` | 事件实际发生时间；没有明确证据时为空 |
+| `available_at` | 系统最早可使用时间，默认等于 `publish_time`，不会早于它 |
+| `event_type`, `event_key` | 内容事件类型和同一事件的去重键 |
+| `price_echo` | 是否主要复述预测起点前已发生的价格变化 |
+| `conclusion_delay_hours` | `publish_time - observation_end`，可为空 |
 | `ai_summary` | 网站自带 AI 摘要（核心内容） |
 | `body_text` | 正文纯文本（过短时用摘要兜底） |
 
@@ -167,8 +174,15 @@ zixun/
 
 ### 与 K 线对齐
 
-`publish_time` 是真实 `DATETIME`，可直接按日聚合与 K 线 join。
-`queries.count_by_day()` 已提供"按日 × 主品种"的篇数序列，可作为 K 线副图数据源。
+数据库保留旧的本地时间字符串以兼容历史数据；所有校准比较都由
+`zixun.time_alignment` 解析为带 `Asia/Shanghai` 时区的 aware 时间。
+`available_at <= forecast_origin` 是资讯进入校准的硬门槛，统计期结束时间不能替代
+发布时间。`queries.count_by_day()` 仍提供"按日 × 主品种"的篇数序列，可作为 K 线副图数据源。
+
+K 线供应商记录的 `T` 是小时 bar 起始标签，`C` 在 bar 完成时可用；因此 `14:00`
+bar 的真实收盘端点是 `15:00`。Kronos 产物同时写出 `forecast_origin`、完整的
+`target_close_timestamps` 和三个 `target_close_at`，校准按这些端点而不是自然日
+`D1/D2/D3` 映射，跨周末/节假日也只使用产物提供的交易日端点。
 
 ---
 

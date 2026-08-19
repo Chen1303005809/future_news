@@ -10,11 +10,30 @@
 #   - base_url 用 OpenAI 兼容端点，可换通义/Moonshot/OpenAI 等。
 
 retrieval:
-  lookback_days: 3                    # 资讯回溯天数（以 origin_timestamp 为上界往前）
+  lookback_days: 3                    # 资讯回溯天数（以 forecast_origin 为上界往前）
   max_articles: 15                    # 喂给 LLM 的资讯条数上限（按时间近排序截断）
   fallback_to_black_sector: true      # 目标品种 DB 无数据时退到 ironore+rebar（黑色系通用）
   ai_summary_cap: 200                 # prompt 内 ai_summary 截断字数
   preview_cap: 160                    # prompt 内正文预览截断字数
+
+# 资讯—K线时间对齐。影响窗口是实验参数：null 表示在当前三个真实收盘端点
+# 内都可用，不凭经验截断；待历史事件研究后再按 event_type 配置小时数。
+time_alignment:
+  timezone: Asia/Shanghai
+  bar_duration_minutes: 60             # K线 T 为 bar 起始标签，C 在此后完成
+  impact_window_hours:
+    default: null
+    flash_event: null
+    accident: null
+    production_event: null
+    transport_disruption: null
+    policy: null
+    price_adjustment: null
+    shipment_arrival: null
+    daily_recap: null
+    weekly_data: null
+    monthly_data: null
+    supply_data: null
 
 llm:
   base_url: "https://api.deepseek.com/v1"   # OpenAI 兼容端点

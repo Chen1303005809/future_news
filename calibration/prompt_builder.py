@@ -1,9 +1,4 @@
-"""构造 LLM 的 system / user 消息。
-
-- system：角色定义（黑色系商品分析师）+ 输出 JSON 契约 + 温和校准约束。
-- user：标的（品种中文名、合约、origin_close）、三日原始预测（概率+收益率）、
-  时间窗口内编号化资讯（字段截断防上下文爆炸）。
-"""
+"""构造带时间审计元数据的校准提示词。"""
 from __future__ import annotations
 
 from .article_retrieval import ArticleDigest
@@ -13,12 +8,16 @@ from .instrument_mapping import instrument_to_variety, variety_label
 
 SYSTEM_PROMPT = """你是一名专注黑色系商品（螺纹钢/铁矿石/焦煤/焦炭）现货基本面的资深分析师，擅长结合产业资讯校准技术面预测。
 
-你将收到一份 Kronos 时序模型对目标合约未来三个交易日的预测（每日的上涨概率与预测收益率），以及预测时点之前一段时间的相关产业资讯。请基于资讯对模型预测做"研判 + 温和数值校准"。
+你将收到 Kronos 对三个真实交易收盘端点的预测，以及预测起点之前可获得的产业资讯。请基于资讯做“研判 + 温和数值校准”。
 
 规则：
 1. 只使用提供的资讯，不得编造来源或数据；资讯不足时就明说不确定。
-2. 校准必须温和：单日上涨概率偏移不超过 ±0.10，单日预测收益率偏移不超过 ±0.015（1.5%）。这是硬约束。
-3. 严格按以下 JSON 结构返回，不要输出其他内容：
+2. 只有 available_at <= forecast_origin 的资讯才可使用。统计期、事件发生时间和观察结束时间不能替代 available_at；没有发布时间的资讯必须 abstain。
+3. 资讯只能影响列出的、且 target_close_at >= available_at 的收盘端点。不能把自然日 D1/D2/D3 当作端点，也不能影响 available_at 之前已经完成的收盘。
+4. price_echo=true 的日报/复盘主要重复预测起点前已经发生的价格变化，默认不对数值做新增调整；只有明确的新基本面事实才可考虑，且要降低信心。
+5. 同一 event_key 的跟踪报道若没有新增事实、影响规模或状态变化，只采用首次披露。
+6. 校准必须温和：单日上涨概率偏移不超过 ±0.10，单日预测收益率偏移不超过 ±0.015（1.5%）。这是硬约束。
+7. 严格按以下 JSON 结构返回，不要输出其他内容：
 
 {
   "view": "bullish | bearish | range",
@@ -45,8 +44,35 @@ def _render_article(idx: int, a: ArticleDigest, summary_cap: int, preview_cap: i
         summary = summary[:summary_cap] + "…"
     lines = [
         f"[{idx}] {a.title}",
-        f"    时间: {a.publish_time}  类型: {a.report_type or '-'}",
+        f"    publish_time: {a.publish_time_at or a.publish_time or '-'}  "
+        f"available_at: {a.available_at or '-'}",
     ]
+    age = (
+        f"{a.effective_age_hours:.2f} 小时"
+        if a.effective_age_hours is not None
+        else "-"
+    )
+    delay = (
+        f"{a.conclusion_delay_hours:.2f} 小时"
+        if a.conclusion_delay_hours is not None
+        else "-"
+    )
+    lines.extend(
+        [
+            f"    有效年龄: {age}",
+            f"    可影响端点: {', '.join(a.eligible_target_close_at) or '-'}",
+            f"    事件类型: {a.event_type or a.report_type or '-'}  "
+            f"price_echo: {str(a.price_echo).lower()}  "
+            f"conclusion_delay: {delay}  event_key: {a.event_key or '-'}",
+        ]
+    )
+    if a.observation_start or a.observation_end or a.event_time:
+        lines.append(
+            f"    observation: {a.observation_start or '-'} ~ {a.observation_end or '-'}  "
+            f"event_time: {a.event_time or '-'}"
+        )
+    if a.abstain_recommended:
+        lines.append("    处理建议: abstain/显著降权（价格复述）")
     if summary:
         lines.append(f"    摘要: {summary}")
     elif a.preview:
@@ -76,22 +102,38 @@ def _build_user_message(
     lines.append("【标的】")
     lines.append(f"合约: {snapshot.instrument}  (品种: {label})")
     lines.append(
-        f"预测起点: {snapshot.origin_timestamp}  "
+        f"forecast_origin: {snapshot.origin_timestamp}  "
         f"起点收盘价: {snapshot.origin_close}"
     )
-    lines.append(f"目标三日: {', '.join(snapshot.target_days)}")
+    lines.append("目标收盘端点:")
+    if snapshot.target_close_at:
+        for day_number, (day, close_at) in enumerate(
+            zip(snapshot.target_days, snapshot.target_close_at, strict=True),
+            start=1,
+        ):
+            lines.append(
+                f"  D{day_number}: {day} -> "
+                f"{close_at.isoformat(timespec='seconds')}"
+            )
+    else:
+        lines.append("  （缺少真实端点，不能进行可靠的端点级校准）")
     lines.append("")
 
     lines.append("【模型三日预测】")
     for d in snapshot.days:
         direction = "偏多" if d.up_probability >= 0.5 else "偏空"
+        endpoint = (
+            d.target_close_at.isoformat(timespec="seconds")
+            if d.target_close_at is not None
+            else "未知"
+        )
         lines.append(
-            f"第{d.day}日: 上涨概率 {d.up_probability:.2f} ({direction}), "
+            f"第{d.day}日 ({endpoint}): 上涨概率 {d.up_probability:.2f} ({direction}), "
             f"预测收益率 {d.predicted_return:+.2%}"
         )
     lines.append("")
 
-    lines.append(f"【相关资讯（预测起点前，共 {len(articles)} 条）】")
+    lines.append(f"【相关资讯（available_at <= forecast_origin，共 {len(articles)} 条）】")
     if not articles:
         lines.append("（时间窗口内无相关资讯）")
     for i, a in enumerate(articles, start=1):

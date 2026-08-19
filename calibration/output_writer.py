@@ -1,8 +1,4 @@
-"""组装并写出 calibration.json。
-
-sources 只回写追溯元数据（id/title/publish_time/report_type），正文已在 prompt
-消费、不回写以避免产物臃肿；需全文可用 id 回查 DB。
-"""
+"""组装并写出带时间对齐审计的 ``calibration.json``。"""
 from __future__ import annotations
 
 import json
@@ -16,13 +12,27 @@ from .config import CalibrationConfig
 from .forecast_loader import ForecastSnapshot
 from .instrument_mapping import instrument_to_variety, variety_label
 
-CALIBRATION_VERSION = "1.0"
+CALIBRATION_VERSION = "2.0"
 
 
 def _source_entry(a: ArticleDigest) -> dict[str, Any]:
     return {
         "id": a.id,
         "publish_time": a.publish_time,
+        "publish_time_at": a.publish_time_at,
+        "available_at": a.available_at,
+        "observation_start": a.observation_start,
+        "observation_end": a.observation_end,
+        "event_time": a.event_time,
+        "effective_age_hours": a.effective_age_hours,
+        "eligible_endpoint_indices": list(a.eligible_endpoint_indices),
+        "eligible_target_close_at": list(a.eligible_target_close_at),
+        "event_type": a.event_type,
+        "price_echo": a.price_echo,
+        "conclusion_delay_hours": a.conclusion_delay_hours,
+        "conclusion_delay": a.conclusion_delay,
+        "event_key": a.event_key,
+        "abstain_recommended": a.abstain_recommended,
         "title": a.title,
         "report_type": a.report_type,
     }
@@ -45,6 +55,7 @@ def build_output(
     meta: dict[str, Any] = {
         "calibration_version": CALIBRATION_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "timezone": "Asia/Shanghai",
     }
     if llm_model is not None:
         meta["llm_model"] = llm_model
@@ -64,6 +75,11 @@ def build_output(
         "max_articles": config.max_articles,
         "max_prob_shift": config.max_prob_shift,
         "max_return_shift": config.max_return_shift,
+        "time_alignment": {
+            "timezone": config.alignment_policy.timezone_name,
+            "bar_duration_minutes": config.alignment_policy.bar_duration.total_seconds() / 60,
+            "impact_window_hours": dict(config.alignment_policy.impact_window_hours),
+        },
     }
 
     forecast = {
@@ -71,9 +87,14 @@ def build_output(
         "variety_code": variety,
         "variety_label": variety_label(variety) if variety else snapshot.instrument,
         "origin_timestamp": snapshot.origin_timestamp,
+        "forecast_origin": snapshot.origin_timestamp,
         "origin_trading_day": snapshot.origin_trading_day,
         "origin_close": snapshot.origin_close,
         "target_days": list(snapshot.target_days),
+        "target_close_at": [
+            value.isoformat(timespec="seconds")
+            for value in snapshot.target_close_at
+        ],
     }
 
     days = []
@@ -81,6 +102,11 @@ def build_output(
         days.append(
             {
                 "day": d.day,
+                "target_close_at": (
+                    d.target_close_at.isoformat(timespec="seconds")
+                    if d.target_close_at is not None
+                    else None
+                ),
                 "original": {
                     "up_probability": round(d.original_probability, 6),
                     "predicted_return": round(d.original_return, 6),
