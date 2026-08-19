@@ -95,6 +95,7 @@ def _passthrough_result(
             applied_return_shift=0.0,
             agreement="agree",
             direction_flipped=False,
+            target_close_at=d.target_close_at,
         )
         for d in snapshot.days
     )

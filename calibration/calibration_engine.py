@@ -11,6 +11,7 @@ LLM 是文本模型，不能直接改预测数值。校准做法：
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from .config import CalibrationConfig
@@ -82,6 +83,7 @@ class DayCalibration:
     applied_return_shift: float  # 裁剪后实际生效的收益率偏移
     agreement: str
     direction_flipped: bool
+    target_close_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,7 @@ def apply_calibration(
                 applied_return_shift=applied_return_shift,
                 agreement=raw["agreement"],
                 direction_flipped=direction_flipped,
+                target_close_at=snap_day.target_close_at,
             )
         )
 
