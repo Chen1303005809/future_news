@@ -22,6 +22,7 @@ import streamlit as st  # noqa: E402
 from zixun import cron, filters as filters_mod, queries, runner  # noqa: E402
 from zixun.forecast_dashboard import render_forecast_section  # noqa: E402
 from zixun.settings import (  # noqa: E402
+    event_type_display,
     REPORT_TYPE_LABELS,
     RUN_STATUS_PATH,
     RUN_SCRIPT,
@@ -249,9 +250,14 @@ if not arts:
 else:
     adf = pd.DataFrame(arts)
     adf["品种"] = adf["variety"].map(variety_display)
-    adf["类型"] = adf["report_type"].map(lambda r: REPORT_TYPE_LABELS.get(r, r))
-    show = adf[["publish_time", "品种", "类型", "title", "preview"]].copy()
-    show.columns = ["发布时间", "品种", "类型", "标题", "摘要预览"]
+    adf["报告类型"] = adf["report_type"].map(
+        lambda r: REPORT_TYPE_LABELS.get(r, r)
+    )
+    adf["事件类型"] = adf["event_type"].map(event_type_display)
+    show = adf[
+        ["publish_time", "品种", "报告类型", "事件类型", "title", "preview"]
+    ].copy()
+    show.columns = ["发布时间", "品种", "报告类型", "事件类型", "标题", "摘要预览"]
     st.dataframe(show, width="stretch", height=420, hide_index=True)
 
     st.subheader("🔎 查看详情")
@@ -264,12 +270,13 @@ else:
         detail = queries.get_article(options[sel])
         if detail:
             st.markdown(f"### {detail['title']}")
-            m1, m2, m3 = st.columns(3)
+            m1, m2, m3, m4 = st.columns(4)
             m1.markdown(f"**品种**：{variety_display(detail['variety'])}")
             m2.markdown(
-                f"**类型**：{REPORT_TYPE_LABELS.get(detail['report_type'], detail['report_type'])}"
+                f"**报告类型**：{REPORT_TYPE_LABELS.get(detail['report_type'], detail['report_type'])}"
             )
-            m3.markdown(f"**发布时间**：{detail['publish_time']}")
+            m3.markdown(f"**事件类型**：{event_type_display(detail.get('event_type'))}")
+            m4.markdown(f"**发布时间**：{detail['publish_time']}")
             st.caption(
                 f"频道：{detail['source_channel']} | 栏目：{detail['source_id']}"
             )

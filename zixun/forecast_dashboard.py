@@ -23,7 +23,7 @@ from .forecast_runner import (
     start_forecast,
     tail_log,
 )
-from .settings import VARIETY_LABELS
+from .settings import VARIETY_LABELS, event_type_display
 
 VIEW_LABELS = {
     "bullish": "🐂 偏多",
@@ -35,6 +35,19 @@ VIEW_LABELS = {
 def _contract_label(c: dict) -> str:
     label = VARIETY_LABELS.get(c["variety"], c["variety"])
     return f"{label} {c['contract']}（{c['bars']} 根K线）"
+
+
+def _calibration_source_rows(sources: list[dict]) -> list[dict]:
+    """为校准来源表保留报告类型和内容事件类型两个维度。"""
+    return [
+        {
+            "发布时间": source.get("publish_time"),
+            "报告类型": source.get("report_type"),
+            "事件类型": event_type_display(source.get("event_type")),
+            "标题": source.get("title"),
+        }
+        for source in sources
+    ]
 
 
 @st.fragment(run_every=5)
@@ -177,12 +190,5 @@ def _render_calibration(calib: dict) -> None:
     sources = calib.get("sources") or []
     if sources:
         with st.expander(f"📚 校准参考资讯（{len(sources)} 条）", expanded=False):
-            srows = [
-                {
-                    "发布时间": s.get("publish_time"),
-                    "类型": s.get("report_type"),
-                    "标题": s.get("title"),
-                }
-                for s in sources
-            ]
+            srows = _calibration_source_rows(sources)
             st.dataframe(pd.DataFrame(srows), width="stretch", hide_index=True)

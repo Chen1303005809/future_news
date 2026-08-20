@@ -121,3 +121,29 @@ REPORT_TYPE_LABELS = {
     "analysis": "分析/快讯",
     "event": "事件快讯",
 }
+
+# 内容级事件类型。它与 ``report_type`` 不同：前者描述资讯中的实际事件，
+# 后者描述文章/栏目形态。未知的新类型保留原值，避免展示层掩盖采集数据。
+EVENT_TYPE_LABELS = {
+    "daily_recap": "行情复盘",
+    "weekly_data": "周度数据",
+    "monthly_data": "月度数据",
+    "flash_event": "突发快讯",
+    "accident": "事故/灾害",
+    "transport_disruption": "运输中断",
+    "policy": "政策/环保",
+    "production_event": "生产扰动",
+    "price_adjustment": "价格调整",
+    "shipment_arrival": "发运/到港",
+    "supply_data": "供需数据",
+    "event": "事件快讯",
+    "unknown": "未分类",
+}
+
+
+def event_type_display(value: object) -> str:
+    """将内容事件类型显示为中文；空值显示为“未分类”。"""
+    text = "" if value is None else str(value).strip()
+    if not text or text.lower() in {"nan", "<na>", "none"}:
+        return "未分类"
+    return EVENT_TYPE_LABELS.get(text, text)
